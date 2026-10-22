@@ -1,0 +1,93 @@
+import { createClient } from "@supabase/supabase-js";
+import { config } from "./config.js";
+
+export const db = createClient(config.supabaseUrl, config.supabaseKey, {
+  auth: { persistSession: false },
+});
+
+export type Item = {
+  id: number;
+  created_at: string;
+  source_type: string;
+  source_url: string | null;
+  tg_chat_id: number;
+  tg_message_id: number;
+  reply_message_id: number | null;
+  batch_id: string | null;
+  input: ItemInput;
+  forward_author: string | null;
+  forward_date: string | null;
+  status: string;
+  attempts: number;
+  author: string | null;
+  caption: string | null;
+  title: string | null;
+  summary: string | null;
+  content_type: string | null;
+  kind: string | null;
+  theme: string | null;
+  tags: string[];
+  structured: Structured | null;
+  raw_text: string | null;
+  archive_file_ids: string[];
+  archive_link: string | null;
+};
+
+export type ItemInput = {
+  text?: string;
+  file_id?: string;
+  mime?: string;
+  file_size?: number;
+};
+
+export type Structured = { points?: string[]; ingredients?: string[]; steps?: string[] };
+
+export async function insertItem(row: Partial<Item>): Promise<Item> {
+  const { data, error } = await db.from("items").insert(row).select().single();
+  if (error) throw error;
+  return data as Item;
+}
+
+export async function updateItem(id: number, patch: Record<string, unknown>) {
+  const { error } = await db.from("items").update({ ...patch, updated_at: new Date().toISOString() }).eq("id", id);
+  if (error) throw error;
+}
+
+export async function claimItems(n: number): Promise<Item[]> {
+  const { data, error } = await db.rpc("claim_items", { n });
+  if (error) throw error;
+  return (data ?? []) as Item[];
+}
+
+export async function findByUrl(url: string): Promise<Item | null> {
+  const { data } = await db
+    .from("items")
+    .select()
+    .eq("source_url", url)
+    .in("status", ["ok", "pending_media", "queued", "processing"])
+    .limit(1)
+    .maybeSingle();
+  return data as Item | null;
+}
+
+export async function findByHash(hash: string, excludeId: number): Promise<Item | null> {
+  const { data } = await db
+    .from("items")
+    .select()
+    .eq("file_hash", hash)
+    .eq("status", "ok")
+    .neq("id", excludeId)
+    .limit(1)
+    .maybeSingle();
+  return data as Item | null;
+}
+
+export async function getSetting(key: string): Promise<string | null> {
+  const { data } = await db.from("settings").select("value").eq("key", key).maybeSingle();
+  return data?.value ?? null;
+}
+
+export async function setSetting(key: string, value: string) {
+  const { error } = await db.from("settings").upsert({ key, value });
+  if (error) throw error;
+}
