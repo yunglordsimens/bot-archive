@@ -45,14 +45,15 @@ export const SOURCE_LABEL: Record<string, string> = {
   tiktok: "🎵 тикток",
   youtube: "▶️ youtube",
   instagram: "📸 reels",
-  web: "🔗 ссылка",
+  link: "🔗 ссылка",
   text: "📝 текст",
+  forwarded: "↪️ пересланное",
   screenshot: "🖼 скрин",
   voice: "🎙 голосовое",
   audio: "🎧 аудио",
   video: "🎬 видео",
   video_note: "⭕️ кружочек",
-  file: "📄 файл",
+  document: "📄 файл",
 };
 
 export const TG_FILE_LIMIT = 20 * 1024 * 1024;

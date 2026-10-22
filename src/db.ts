@@ -8,15 +8,19 @@ export const db = createClient(config.supabaseUrl, config.supabaseKey, {
 export type Item = {
   id: number;
   created_at: string;
-  source_type: string;
+  input_kind: string;
+  origin: string | null;
   source_url: string | null;
   tg_chat_id: number;
   tg_message_id: number;
   reply_message_id: number | null;
   batch_id: string | null;
   input: ItemInput;
-  forward_author: string | null;
-  forward_date: string | null;
+  origin_detail: string | null;
+  occurred_at: string | null;
+  text_hash: string | null;
+  tg_file_id: string | null;
+  duplicate_of: number | null;
   status: string;
   attempts: number;
   author: string | null;
@@ -59,11 +63,11 @@ export async function claimItems(n: number): Promise<Item[]> {
   return (data ?? []) as Item[];
 }
 
-export async function findByUrl(url: string): Promise<Item | null> {
+export async function findByTextHash(hash: string): Promise<Item | null> {
   const { data } = await db
     .from("items")
     .select()
-    .eq("source_url", url)
+    .eq("text_hash", hash)
     .in("status", ["ok", "pending_media", "queued", "processing"])
     .limit(1)
     .maybeSingle();
@@ -74,7 +78,7 @@ export async function findByHash(hash: string, excludeId: number): Promise<Item 
   const { data } = await db
     .from("items")
     .select()
-    .eq("file_hash", hash)
+    .eq("media_hash", hash)
     .eq("status", "ok")
     .neq("id", excludeId)
     .limit(1)

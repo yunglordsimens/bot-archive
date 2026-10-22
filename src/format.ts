@@ -10,8 +10,13 @@ export function plural(n: number, one: string, few: string, many: string) {
 
 export const esc = (s: string) => s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]!);
 
-export function acceptedText(sourceType: string) {
-  return `${SOURCE_LABEL[sourceType] ?? "📥"} · принято`;
+export function sourceLabel(inputKind: string, origin?: string | null) {
+  const key = inputKind === "link" && origin && origin !== "other" ? origin : inputKind;
+  return SOURCE_LABEL[key] ?? "📥";
+}
+
+export function acceptedText(inputKind: string, origin?: string | null) {
+  return `${sourceLabel(inputKind, origin)} · принято`;
 }
 
 // "💡 совет · как назначать цену · 5 пунктов · деньги и бизнес-идеи"
@@ -25,11 +30,17 @@ export function resultLine(it: Pick<Item, "content_type" | "title" | "structured
   return parts.filter(Boolean).join(" · ");
 }
 
+// Short by design (SPEC §3): the bot is a store, not a chat partner.
 export function resultMessage(it: Item) {
-  let msg = `<b>${esc(resultLine(it))}</b>\n${esc(it.summary ?? "")}`;
-  if (it.status === "pending_media") msg += `\n\n⏳ видео не скачалось — сохранил ссылку и подпись, повторю через сутки`;
-  if (it.archive_link) msg += `\n<a href="${it.archive_link}">оригинал</a>`;
+  let msg = esc(resultLine(it));
+  if (it.archive_link) msg += ` · <a href="${it.archive_link}">оригинал</a>`;
+  if (it.status === "pending_media") msg += `\n⏳ видео не скачалось — сохранил ссылку и подпись, повторю через сутки`;
   return msg;
+}
+
+export function duplicateText(it: Pick<Item, "title" | "summary" | "created_at">) {
+  const date = new Date(it.created_at).toLocaleDateString("ru-RU", { day: "numeric", month: "short", year: "numeric" });
+  return `♻️ уже есть: ${esc(it.title ?? it.summary ?? "")}, ${date}`;
 }
 
 export function listLine(it: Item) {

@@ -13,6 +13,7 @@ export type Analysis = {
   tags: string[];
   structured: Structured;
   raw_text: string;
+  language: string[];
 };
 
 const schema = {
@@ -33,8 +34,9 @@ const schema = {
       },
     },
     raw_text: { type: Type.STRING, description: "Дословно: что говорят и что написано на экране/картинке, на языке оригинала" },
+    language: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Языки в контенте, ISO-коды: ru, uk, cs, en…" },
   },
-  required: ["title", "summary", "content_type", "kind", "theme", "tags", "structured", "raw_text"],
+  required: ["title", "summary", "content_type", "kind", "theme", "tags", "structured", "raw_text", "language"],
 };
 
 const SYSTEM = `Ты разбираешь сохранённый контент для личного архива. Вход может быть видео (со звуком), картинкой, аудио, текстом или страницей.
@@ -104,6 +106,7 @@ function validate(raw: string): Analysis {
   a.tags = (a.tags ?? []).map((t) => t.toLowerCase().trim()).filter(Boolean);
   a.structured ??= {};
   a.raw_text ??= "";
+  a.language ??= [];
   return a;
 }
 

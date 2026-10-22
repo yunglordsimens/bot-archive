@@ -6,7 +6,7 @@ import { claimItems, db, findByHash, updateItem, type Item } from "./db.js";
 import { analyze, embed, mediaPart, sleep, textPart, urlPart, type Analysis } from "./gemini.js";
 import { fetchTikTok, fetchVideoGeneric, fetchWebPage, fetchYouTubeText, updateYtdlp, type Fetched } from "./fetchers.js";
 import { archiveCopy, archiveUpload } from "./archive.js";
-import { batchMessage, resultMessage } from "./format.js";
+import { batchMessage, duplicateText, resultMessage } from "./format.js";
 
 const DAY = 24 * 3600 * 1000;
 const MAX_MEDIA_RETRIES = 7;
@@ -22,10 +22,10 @@ async function tgDownload(api: Api, fileId: string): Promise<Buffer> {
 
 function contextText(it: Item, extra: Record<string, string | undefined> = {}) {
   const lines = Object.entries({
-    "Источник": it.source_type,
+    "Источник": it.origin && it.origin !== "telegram" ? it.origin : it.input_kind,
     "Ссылка": it.source_url ?? undefined,
     "Комментарий пользователя": it.input.text && it.source_url ? it.input.text : undefined,
-    "Переслано от": it.forward_author ?? undefined,
+    "Переслано от": it.origin_detail ?? undefined,
     ...extra,
   }).filter(([, v]) => v);
   return lines.map(([k, v]) => `${k}: ${v}`).join("\n");
@@ -39,10 +39,12 @@ async function processVideoLink(api: Api, it: Item, f: Fetched): Promise<Result>
   if (!hasMedia) parts.push(textPart("Видео не удалось скачать — опирайся только на подпись и автора."));
 
   const analysis = await analyze(parts);
-  const patch: Record<string, unknown> = { caption: f.caption, author: f.author, original_date: f.date, error: hasMedia ? null : f.log.join("; ") };
+  const patch: Record<string, unknown> = { caption: f.caption, author: f.author, raw_meta: { via: f.via, log: f.log } };
+  if (!it.occurred_at && f.date) patch.occurred_at = f.date;
   if (hasMedia) {
     const a = await archiveUpload(api, f, `${it.source_url}\n${analysis.title}`);
     patch.archive_file_ids = a.fileIds;
+    patch.tg_file_id = a.fileIds[0];
     patch.archive_link = a.link;
     patch.next_retry_at = null;
   } else {
@@ -52,7 +54,8 @@ async function processVideoLink(api: Api, it: Item, f: Fetched): Promise<Result>
 }
 
 async function processItem(api: Api, it: Item): Promise<Result> {
-  switch (it.source_type) {
+  const kind = it.input_kind === "link" ? it.origin : it.input_kind;
+  switch (kind) {
     case "tiktok":
       return processVideoLink(api, it, await fetchTikTok(it.source_url!));
     case "instagram":
@@ -72,13 +75,14 @@ async function processItem(api: Api, it: Item): Promise<Result> {
       }
     }
 
-    case "web": {
+    case "other": {
       const p = await fetchWebPage(it.source_url!);
       const analysis = await analyze([textPart(contextText(it, { "Сайт": p.site, "Заголовок": p.title, "Текст страницы": p.text }))]);
       return { analysis, patch: { caption: p.title, author: p.site }, status: "ok" };
     }
 
-    case "text": {
+    case "text":
+    case "forwarded": {
       const analysis = await analyze([textPart(contextText(it, { "Текст": it.input.text }))]);
       return { analysis, patch: {}, status: "ok" };
     }
@@ -87,18 +91,18 @@ async function processItem(api: Api, it: Item): Promise<Result> {
       // screenshot / voice / audio / video / video_note — file is in Telegram
       const buf = await tgDownload(api, it.input.file_id!);
       const hash = createHash("sha256").update(buf).digest("hex");
-      if (it.source_type === "screenshot") {
+      if (it.input_kind === "screenshot") {
         const dup = await findByHash(hash, it.id);
         if (dup) {
           return { analysis: dup as unknown as Analysis, status: "duplicate",
-            patch: { file_hash: hash, duplicate_of: dup.id, title: dup.title, kind: dup.kind } };
+            patch: { media_hash: hash, duplicate_of: dup.id, title: dup.title, kind: dup.kind } };
         }
       }
       const parts: Part[] = [textPart(contextText(it, { "Подпись": it.input.text }))];
       parts.push(await mediaPart(buf, it.input.mime ?? "application/octet-stream"));
       const analysis = await analyze(parts);
       const link = await archiveCopy(api, it.tg_chat_id, it.tg_message_id);
-      return { analysis, status: "ok", patch: { file_hash: hash, archive_file_ids: [it.input.file_id], archive_link: link } };
+      return { analysis, status: "ok", patch: { media_hash: hash, archive_file_ids: [it.input.file_id], archive_link: link } };
     }
   }
 }
@@ -114,7 +118,8 @@ async function finishReply(api: Api, it: Item) {
   } else if (it.status === "failed") {
     text = "⚠️ не получилось разобрать · сохранено, ссылка не потеряется";
   } else if (it.status === "duplicate") {
-    text = "♻️ уже есть";
+    const { data } = await db.from("items").select("title, summary, created_at").eq("id", it.duplicate_of!).single();
+    text = data ? duplicateText(data) : "♻️ уже есть";
   } else {
     text = resultMessage(it);
   }
@@ -133,7 +138,7 @@ async function handle(api: Api, it: Item) {
     if (r.status !== "duplicate") {
       Object.assign(patch, {
         title: a.title, summary: a.summary, content_type: a.content_type, kind: a.kind,
-        theme: a.theme, tags: a.tags, structured: a.structured, raw_text: a.raw_text,
+        theme: a.theme, tags: a.tags, structured: a.structured, raw_text: a.raw_text, language: a.language,
         embedding: JSON.stringify(await embed(`${a.title}\n${a.summary}\n${a.raw_text}`)),
       });
     }

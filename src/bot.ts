@@ -1,18 +1,33 @@
+import { createHash } from "node:crypto";
 import { Bot, type Context } from "grammy";
 import type { Message, MessageEntity } from "grammy/types";
 import { config, THEMES, TG_FILE_LIMIT, TYPES } from "./config.js";
-import { db, findByUrl, insertItem, setSetting, type Item } from "./db.js";
-import { acceptedText, esc, listLine, plural } from "./format.js";
+import { db, findByTextHash, insertItem, setSetting, type Item } from "./db.js";
+import { acceptedText, duplicateText, esc, listLine, plural } from "./format.js";
 import { fetchTikTok } from "./fetchers.js";
 
 const html = { parse_mode: "HTML" as const, link_preview_options: { is_disabled: true } };
 
-function classifyUrl(url: string): string {
+function classifyUrl(url: string): { input_kind: string; origin: string } {
   const host = new URL(url).hostname.replace(/^www\./, "");
-  if (/(^|\.)tiktok\.com$/.test(host)) return "tiktok";
-  if (/(^|\.)(youtube\.com|youtu\.be)$/.test(host)) return "youtube";
-  if (/(^|\.)instagram\.com$/.test(host)) return "instagram";
-  return "web";
+  if (/(^|\.)tiktok\.com$/.test(host)) return { input_kind: "tiktok", origin: "tiktok" };
+  if (/(^|\.)(youtube\.com|youtu\.be)$/.test(host)) return { input_kind: "link", origin: "youtube" };
+  if (/(^|\.)instagram\.com$/.test(host)) return { input_kind: "link", origin: "instagram" };
+  return { input_kind: "link", origin: "other" };
+}
+
+const TRACKING = /^(utm_\w+|si|_t|_r|igsh|igshid|is_from_webapp|sender_device|share_\w+|fbclid)$/;
+
+// sha256 of a normalized url (tracking params dropped) or text — for exact dedup.
+function textHash(s: string, isUrl: boolean) {
+  let norm = s.trim().toLowerCase().replace(/\s+/g, " ");
+  if (isUrl) {
+    const u = new URL(s.trim());
+    for (const k of [...u.searchParams.keys()]) if (TRACKING.test(k)) u.searchParams.delete(k);
+    u.hash = "";
+    norm = u.toString().replace(/\/$/, "");
+  }
+  return createHash("sha256").update(norm).digest("hex");
 }
 
 function extractUrls(text: string, entities: MessageEntity[] = []): string[] {
@@ -30,33 +45,33 @@ function forwardInfo(m: Message) {
     : o.type === "hidden_user" ? o.sender_user_name
     : o.type === "chat" ? o.sender_chat.title ?? ""
     : o.chat.title ?? "";
-  return { forward_author: author, forward_date: new Date(o.date * 1000).toISOString() };
+  return { origin_detail: author, occurred_at: new Date(o.date * 1000).toISOString() };
 }
 
-type FileRef = { source_type: string; file_id: string; mime: string; file_size?: number };
+type FileRef = { input_kind: string; file_id: string; mime: string; file_size?: number };
 
 function fileOf(m: Message): FileRef | undefined {
   if (m.photo) {
     const p = m.photo[m.photo.length - 1];
-    return { source_type: "screenshot", file_id: p.file_id, mime: "image/jpeg", file_size: p.file_size };
+    return { input_kind: "screenshot", file_id: p.file_id, mime: "image/jpeg", file_size: p.file_size };
   }
-  if (m.voice) return { source_type: "voice", file_id: m.voice.file_id, mime: m.voice.mime_type ?? "audio/ogg", file_size: m.voice.file_size };
-  if (m.video_note) return { source_type: "video_note", file_id: m.video_note.file_id, mime: "video/mp4", file_size: m.video_note.file_size };
-  if (m.audio) return { source_type: "audio", file_id: m.audio.file_id, mime: m.audio.mime_type ?? "audio/mpeg", file_size: m.audio.file_size };
-  if (m.video) return { source_type: "video", file_id: m.video.file_id, mime: m.video.mime_type ?? "video/mp4", file_size: m.video.file_size };
+  if (m.voice) return { input_kind: "voice", file_id: m.voice.file_id, mime: m.voice.mime_type ?? "audio/ogg", file_size: m.voice.file_size };
+  if (m.video_note) return { input_kind: "video_note", file_id: m.video_note.file_id, mime: "video/mp4", file_size: m.video_note.file_size };
+  if (m.audio) return { input_kind: "audio", file_id: m.audio.file_id, mime: m.audio.mime_type ?? "audio/mpeg", file_size: m.audio.file_size };
+  if (m.video) return { input_kind: "video", file_id: m.video.file_id, mime: m.video.mime_type ?? "video/mp4", file_size: m.video.file_size };
   if (m.document) {
     const mime = m.document.mime_type ?? "application/octet-stream";
-    const type = mime.startsWith("image/") ? "screenshot" : mime.startsWith("video/") ? "video" : mime.startsWith("audio/") ? "audio" : "file";
-    return { source_type: type, file_id: m.document.file_id, mime, file_size: m.document.file_size };
+    const type = mime.startsWith("image/") ? "screenshot" : mime.startsWith("video/") ? "video" : mime.startsWith("audio/") ? "audio" : "document";
+    return { input_kind: type, file_id: m.document.file_id, mime, file_size: m.document.file_size };
   }
 }
 
 function baseRow(m: Message) {
-  return { tg_chat_id: m.chat.id, tg_message_id: m.message_id, ...forwardInfo(m) };
+  return { tg_chat_id: m.chat.id, tg_message_id: m.message_id, origin: "telegram", ...forwardInfo(m) };
 }
 
 async function accept(ctx: Context, row: Partial<Item>) {
-  const reply = await ctx.reply(acceptedText(row.source_type!), { reply_parameters: { message_id: ctx.msg!.message_id } });
+  const reply = await ctx.reply(acceptedText(row.input_kind!, row.origin), { reply_parameters: { message_id: ctx.msg!.message_id } });
   await insertItem({ ...row, reply_message_id: reply.message_id, status: "queued" } as Partial<Item>);
 }
 
@@ -77,7 +92,7 @@ async function flushAlbum(groupId: string) {
   const caption = msgs.find((m) => m.caption)?.caption;
   // One insert so the worker never sees half an album.
   const { error } = await db.from("items").insert(ok.map(({ m, f }) => ({
-    ...baseRow(m), source_type: f.source_type, batch_id: groupId, reply_message_id: reply.message_id,
+    ...baseRow(m), input_kind: f.input_kind, tg_file_id: f.file_id, batch_id: groupId, reply_message_id: reply.message_id,
     input: { file_id: f.file_id, mime: f.mime, file_size: f.file_size, text: caption },
   })));
   if (error) throw error;
@@ -158,21 +173,29 @@ export function createBot() {
         return;
       }
       if ((file.file_size ?? 0) > TG_FILE_LIMIT) return ctx.reply("слишком большой (>20 МБ) — не обработать", { reply_parameters: { message_id: m.message_id } });
-      return accept(ctx, { ...baseRow(m), source_type: file.source_type, input: { file_id: file.file_id, mime: file.mime, file_size: file.file_size, text: m.caption } });
+      return accept(ctx, { ...baseRow(m), input_kind: file.input_kind, tg_file_id: file.file_id, input: { file_id: file.file_id, mime: file.mime, file_size: file.file_size, text: m.caption } });
     }
 
     const text = m.text ?? m.caption;
     if (!text) return;
     const urls = extractUrls(text, m.entities ?? m.caption_entities);
-    if (!urls.length) return accept(ctx, { ...baseRow(m), source_type: "text", input: { text } });
+    const dupReply = (d: Item) => ctx.reply(duplicateText(d), { ...html, reply_parameters: { message_id: m.message_id } });
+
+    if (!urls.length) {
+      const hash = textHash(text, false);
+      const dup = await findByTextHash(hash);
+      if (dup) return dupReply(dup);
+      return accept(ctx, { ...baseRow(m), input_kind: m.forward_origin ? "forwarded" : "text", text_hash: hash, input: { text } });
+    }
 
     for (const url of urls) {
-      const dup = await findByUrl(url);
+      const hash = textHash(url, true);
+      const dup = await findByTextHash(hash);
       if (dup) {
-        await ctx.reply(`♻️ уже есть${dup.title ? ` · ${esc(dup.title)}` : ""}`, { ...html, reply_parameters: { message_id: m.message_id } });
+        await dupReply(dup);
         continue;
       }
-      await accept(ctx, { ...baseRow(m), source_type: classifyUrl(url), source_url: url, input: { text } });
+      await accept(ctx, { ...baseRow(m), ...classifyUrl(url), source_url: url, text_hash: hash, input: { text } });
     }
   });
 
