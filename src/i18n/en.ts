@@ -82,10 +82,10 @@ The bot reacts to your message: 👀 working → 👌 done, 🤷 error.
 Everything saved lives in the archive channel: the post, the card as a reply, the transcript.
 The chat only gets errors (short). A line with a link to the post after each save — via /notify.
 
-<b>Commands</b> — the “Menu” button
-/recent, /project, /theme, /type — find items · /status — bot and queue
-/retry — retry errors · /reprocess — update old items
-/projects — your areas · /notify — notifications · /lang — language`,
+<b>Archive</b> — the “Archive” button left of the message field: feed, filters, search by meaning and words, topics.
+
+<b>Commands</b> — /retry retry errors · /resort re-sort · /notify notifications · /lang language
+Also: /status — bot and queue · /reprocess — update old items · /projects — your areas`,
     chooseThemes: "🗂 Topics — pick one:", chooseTypes: "🏷 Types — pick one:", chooseProjects: "🧭 Areas — pick one:",
     backThemes: "← Topics", backTypes: "← Types", backProjects: "← Areas",
     empty: "nothing yet", recentTitle: "🕘 Recent", statusTitle: "📊 Status",
@@ -132,9 +132,29 @@ The chat only gets errors (short). A line with a link to the post after each sav
     reposted: (n) => `📤 <b>posted again</b> (the old post couldn't be edited or didn't exist): ${n}`,
     failed: (n) => `⚠️ <b>failed</b>: ${n}`,
   },
+  resort: {
+    usage: (l) => `Describe in words how to re-sort. For example:
+<code>/resort split “study” into “courses” and “exams”</code>
+
+Now:
+${l}`,
+    thinking: "🧠 thinking about the structure…",
+    proposal: (l) => `<b>New structure</b>
+${l}
+
+Apply and re-sort all items?`,
+    apply: "✅ Apply", cancel: "✖️ Cancel", cancelled: "cancelled", expired: "the proposal expired — send /resort again",
+    failed: "⚠️ couldn't build the structure — try wording it differently",
+    applied: (l) => `✅ <b>Structure updated</b>
+${l}`,
+    running: "re-sorting is already running — wait for the report",
+    start: (n) => `🔀 re-sorting ${n}…`, progress: (i, n) => `🔀 re-sorting ${i}/${n}…`,
+    done: (c, n, f) => `✅ <b>re-sorted</b>: ${c} of ${n} changed${f ? ` · ⚠️ failed: ${f}` : ""}
+Channel post captions updated.`,
+  },
+  menuButton: "Archive",
   commands: {
-    recent: "last 10 items", project: "items by area", theme: "items by topic", type: "items by type",
-    status: "bot, channel and queue", retry: "retry errors and items without video", reprocess: "update old items to the new format",
-    projects: "my areas", notify: "a line with a link to the post after saving", lang: "language", help: "how to use",
+    retry: "retry errors and items without video", resort: "re-sort: describe how you want it",
+    lang: "language", notify: "a line with a link to the post after saving", help: "how to use",
   },
 };

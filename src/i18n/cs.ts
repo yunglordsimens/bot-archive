@@ -82,10 +82,10 @@ Bot dá na tvou zprávu reakci: 👀 zpracovává se → 👌 hotovo, 🤷 chyba
 Všechno uložené je v archivním kanálu: příspěvek, karta v odpovědi, přepis.
 Do chatu chodí jen chyby (stručně). Řádek s odkazem na příspěvek po každém uložení — přes /notify.
 
-<b>Příkazy</b> — tlačítko „Menu“
-/recent, /project, /theme, /type — najít záznamy · /status — bot a fronta
-/retry — zopakovat chyby · /reprocess — aktualizovat staré záznamy
-/projects — tvoje oblasti · /notify — upozornění · /lang — jazyk`,
+<b>Archiv</b> — tlačítko „Archiv“ vlevo od pole pro zprávu: přehled, filtry, hledání podle smyslu i slov, témata.
+
+<b>Příkazy</b> — /retry zopakovat chyby · /resort přetřídit · /notify oznámení · /lang jazyk
+Také: /status — bot a fronta · /reprocess — aktualizovat staré záznamy · /projects — moje oblasti`,
     chooseThemes: "🗂 Témata — vyber:", chooseTypes: "🏷 Typy — vyber:", chooseProjects: "🧭 Oblasti — vyber:",
     backThemes: "← Témata", backTypes: "← Typy", backProjects: "← Oblasti",
     empty: "zatím nic", recentTitle: "🕘 Poslední", statusTitle: "📊 Stav",
@@ -132,9 +132,29 @@ Do chatu chodí jen chyby (stručně). Řádek s odkazem na příspěvek po kaž
     reposted: (n) => `📤 <b>zveřejněno znovu</b> (starý příspěvek nešel upravit nebo neexistoval): ${n}`,
     failed: (n) => `⚠️ <b>nepovedlo se</b>: ${n}`,
   },
+  resort: {
+    usage: (l) => `Popiš slovy, jak přetřídit. Například:
+<code>/resort rozděl „studium“ na „UMPRUM“ a „státnice“</code>
+
+Teď:
+${l}`,
+    thinking: "🧠 přemýšlím o struktuře…",
+    proposal: (l) => `<b>Nová struktura</b>
+${l}
+
+Použít a přetřídit všechny záznamy?`,
+    apply: "✅ Použít", cancel: "✖️ Zrušit", cancelled: "zrušeno", expired: "návrh už neplatí — pošli /resort znovu",
+    failed: "⚠️ strukturu se nepodařilo sestavit — zkus to formulovat jinak",
+    applied: (l) => `✅ <b>Struktura aktualizována</b>
+${l}`,
+    running: "přetřídění už běží — počkej na zprávu",
+    start: (n) => `🔀 přetřiďuji ${n}…`, progress: (i, n) => `🔀 přetřiďuji ${i}/${n}…`,
+    done: (c, n, f) => `✅ <b>přetříděno</b>: změněno ${c} z ${n}${f ? ` · ⚠️ nepovedlo se: ${f}` : ""}
+Popisky příspěvků v kanálu aktualizovány.`,
+  },
+  menuButton: "Archiv",
   commands: {
-    recent: "posledních 10 záznamů", project: "záznamy podle oblasti", theme: "záznamy podle tématu", type: "záznamy podle typu",
-    status: "bot, kanál a fronta", retry: "zopakovat chyby a záznamy bez videa", reprocess: "aktualizovat staré záznamy na nový formát",
-    projects: "moje oblasti", notify: "řádek s odkazem na příspěvek po uložení", lang: "jazyk", help: "jak používat",
+    retry: "zopakovat chyby a záznamy bez videa", resort: "přetřídit: popiš slovy, jak chceš",
+    lang: "jazyk", notify: "řádek s odkazem na příspěvek po uložení", help: "jak používat",
   },
 };

@@ -23,6 +23,8 @@ export const config = {
   similarThreshold: Number(env("SIMILAR_THRESHOLD", "0.9")),
   workerConcurrency: Number(env("WORKER_CONCURRENCY", "2")),
   tmpDir: env("TMP_DIR", "/tmp/bot-archive"),
+  // Mini App «Архив» (SPEC §6.0); empty = no Menu button
+  miniappUrl: env("MINIAPP_URL", "https://bot-archive-miniapp.vercel.app"),
 };
 
 // Content types: keys are stored in the DB, labels come from the translation files.

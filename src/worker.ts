@@ -13,12 +13,14 @@ import { react, REACT } from "./reactions.js";
 import { tr, type Dict } from "./i18n/index.js";
 import { getUserById, miscProject, profileOf, type User } from "./users.js";
 import { renderCard } from "./card.js";
+import { savePreview, youtubeThumb, type Thumb } from "./preview.js";
 
 const DAY = 24 * 3600 * 1000;
 const MAX_MEDIA_RETRIES = 7;
 
 // media: the parts Gemini saw — reused for the deep format analysis without downloading again.
-type Result = { analysis: Analysis; patch: Record<string, unknown>; status: "ok" | "pending_media" | "duplicate"; publish?: Publish; media?: Part[] };
+// thumb: what the Mini App preview frame is made from.
+type Result = { analysis: Analysis; patch: Record<string, unknown>; status: "ok" | "pending_media" | "duplicate"; publish?: Publish; media?: Part[]; thumb?: Thumb };
 
 const commentsText = (c: string[]) => (c.length ? c.join("\n") : undefined);
 const profileUrl = (origin: string | null, handle?: string) =>
@@ -61,7 +63,8 @@ async function processVideoLink(api: Api, it: Item, u: User, f: Fetched, comment
   if (!it.occurred_at && f.date) patch.occurred_at = f.date;
   if (hasMedia) patch.next_retry_at = null;
   else patch.next_retry_at = it.attempts < MAX_MEDIA_RETRIES ? new Date(Date.now() + DAY).toISOString() : null;
-  return { analysis, patch, status: hasMedia ? "ok" : "pending_media", publish: hasMedia ? { kind: "upload", video: f.video, images: f.images } : undefined, media };
+  return { analysis, patch, status: hasMedia ? "ok" : "pending_media", publish: hasMedia ? { kind: "upload", video: f.video, images: f.images } : undefined, media,
+    thumb: f.video?.buf ?? f.images?.[0]?.buf };
 }
 
 async function processItem(api: Api, it: Item, u: User): Promise<Result> {
@@ -92,21 +95,21 @@ async function processItem(api: Api, it: Item, u: User): Promise<Result> {
       try {
         const media = [urlPart(it.source_url!)];
         const analysis = await analyze([textPart(contextText(it, { "Топ-комментарии": commentsText(comments) })), ...media], p);
-        return { analysis, patch: await ytPatch(), status: "ok", media };
+        return { analysis, patch: await ytPatch(), status: "ok", media, thumb: await youtubeThumb(it.source_url) };
       } catch (e) {
         console.warn(`youtube direct failed for ${it.id}, falling back to subs`, e);
         const y = await fetchYouTubeText(it.source_url!);
         const analysis = await analyze([textPart(contextText(it, {
           "Название": y.title, "Канал": y.author, "Описание": y.description?.slice(0, 3000), "Субтитры": y.subs,
         }))], p);
-        return { analysis, patch: { ...(await ytPatch()), author: y.author, caption: y.title }, status: "ok" };
+        return { analysis, patch: { ...(await ytPatch()), author: y.author, caption: y.title }, status: "ok", thumb: await youtubeThumb(it.source_url) };
       }
     }
 
     case "other": {
       const page = await fetchWebPage(it.source_url!);
       const analysis = await analyze([textPart(contextText(it, { "Сайт": page.site, "Заголовок": page.title, "Текст страницы": page.text }))], p);
-      return { analysis, patch: { caption: page.title, author: page.site }, status: "ok" };
+      return { analysis, patch: { caption: page.title, author: page.site }, status: "ok", thumb: page.image };
     }
 
     case "text":
@@ -128,7 +131,8 @@ async function processItem(api: Api, it: Item, u: User): Promise<Result> {
       }
       const media = [await mediaPart(buf, it.input.mime ?? "application/octet-stream")];
       const analysis = await analyze([textPart(contextText(it, { "Подпись": it.input.text })), ...media], p);
-      return { analysis, status: "ok", patch: { media_hash: hash, archive_file_ids: [it.input.file_id] }, publish: { kind: "copy" }, media };
+      const picture = /^(image|video)\//.test(it.input.mime ?? "") || ["screenshot", "video", "video_note"].includes(it.input_kind);
+      return { analysis, status: "ok", patch: { media_hash: hash, archive_file_ids: [it.input.file_id] }, publish: { kind: "copy" }, media, thumb: picture ? buf : undefined };
     }
   }
 }
@@ -138,8 +142,10 @@ async function processProfile(api: Api, it: Item, u: User): Promise<Result> {
   const extra: Record<string, string | undefined> = { "Тип записи": "профиль / аккаунт" };
   const patch: Record<string, unknown> = {};
   const media: Part[] = [];
+  let thumb: Thumb | undefined;
   if (it.input?.file_id) {
-    media.push(await mediaPart(await tgDownload(api, it.input.file_id), it.input.mime ?? "image/jpeg"));
+    thumb = await tgDownload(api, it.input.file_id);
+    media.push(await mediaPart(thumb, it.input.mime ?? "image/jpeg"));
     patch.archive_file_ids = [it.input.file_id];
   } else {
     const p = await fetchProfile(it.source_url!);
@@ -155,7 +161,7 @@ async function processProfile(api: Api, it: Item, u: User): Promise<Result> {
   const analysis = await analyze([textPart(contextText(it, extra)), ...media], profileOf(u));
   const meta = (patch.raw_meta ?? {}) as RawMeta;
   patch.raw_meta = { ...meta, profile: { ...meta.profile, entity: analysis.entity } };
-  return { analysis, patch, status: "ok", publish: media.length ? { kind: "copy" } : undefined, media };
+  return { analysis, patch, status: "ok", publish: media.length ? { kind: "copy" } : undefined, media, thumb };
 }
 
 // Albums already reported (one message per album, even if two photos finish at the same moment).
@@ -264,6 +270,7 @@ export async function handle(api: Api, it: Item) {
         await addFormatAnalysis(it, r.media, patch, d.geminiLanguage).catch((e) => console.warn(`format analysis failed for ${it.id}`, e));
       }
       await publishItem(api, it, patch, r.publish, u);
+      patch.preview_path = await savePreview(it, r.thumb);
     }
     await updateItem(it.id, patch);
     Object.assign(it, patch);

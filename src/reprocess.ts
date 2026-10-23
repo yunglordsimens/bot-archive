@@ -7,6 +7,7 @@ import { fetchComments, fetchMeta, fetchWebPage } from "./fetchers.js";
 import { postCard, postTranscript, rewritePost } from "./channel.js";
 import { applyAnalysis } from "./worker.js";
 import { addFormatAnalysis, contextText, originalMedia } from "./analysis.js";
+import { ensurePreview } from "./preview.js";
 import { renderCard } from "./card.js";
 import { esc } from "./format.js";
 import { plural, tr } from "./i18n/index.js";
@@ -78,6 +79,7 @@ async function reprocessItem(api: Api, it: Item, u: User): Promise<{ reposted: b
     if (transcript) patch.raw_meta = { ...(patch.raw_meta as RawMeta), transcript_link: transcript };
   }
   await updateItem(it.id, patch);
+  if (!it.preview_path) await ensurePreview(api, { ...it, ...patch } as Item).catch(() => {});
 
   // Refresh the card in the chat, if it's still there.
   if (full.reply_message_id && !full.batch_id) {

@@ -109,6 +109,11 @@ export async function setCommands(api: Api, u: User) {
   const d = tr(u.lang);
   await api.setMyCommands(Object.entries(d.commands).map(([command, description]) => ({ command, description })),
     { scope: { type: "chat", chat_id: u.telegram_user_id } }).catch(() => {});
+  // The "Menu" button opens the Mini App «Архив», labelled in the user's language.
+  if (config.miniappUrl) {
+    await api.setChatMenuButton({ chat_id: u.telegram_user_id, menu_button: { type: "web_app", text: d.menuButton, web_app: { url: config.miniappUrl } } })
+      .catch((e) => console.warn("menu button failed", e?.description ?? e));
+  }
 }
 
 export function registerUi(bot: Bot<Ctx>) {

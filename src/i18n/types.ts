@@ -66,5 +66,11 @@ export type Dict = {
     running: string; allDone: string; start: Fn1; progress: (i: number, n: number) => string;
     done: (ok: number, n: number) => string; edited: Fn1; reposted: Fn1; failed: Fn1;
   };
-  commands: Record<"recent" | "project" | "theme" | "type" | "status" | "retry" | "reprocess" | "projects" | "notify" | "lang" | "help", string>;
+  resort: {
+    usage: Fn1; thinking: string; proposal: Fn1; apply: string; cancel: string; cancelled: string; expired: string; failed: string;
+    applied: Fn1; running: string; start: Fn1; progress: (i: number, n: number) => string; done: (changed: number, n: number, failed: number) => string;
+  };
+  menuButton: string; // the "Menu" button that opens the Mini App
+  // Only these go to the command menu; the rest (/recent, /status, /reprocess, /projects…) still work when typed.
+  commands: Record<"retry" | "resort" | "lang" | "notify" | "help", string>;
 };

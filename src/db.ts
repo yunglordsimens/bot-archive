@@ -48,6 +48,8 @@ export type Item = {
   archive_link: string | null;
   raw_meta: RawMeta | null;
   error: string | null;
+  preview_path?: string | null; // Mini App preview in Storage; "" = none
+  for_blog?: boolean;
 };
 
 export type ItemInput = {

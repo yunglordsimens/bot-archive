@@ -396,7 +396,15 @@ export async function fetchYouTubeText(url: string): Promise<{ title?: string; d
   });
 }
 
-export async function fetchWebPage(url: string): Promise<{ title?: string; text: string; site?: string }> {
+const absUrl = (u: string | undefined, base: string) => {
+  try {
+    return u ? new URL(u, base).href : undefined;
+  } catch {
+    return undefined;
+  }
+};
+
+export async function fetchWebPage(url: string): Promise<{ title?: string; text: string; site?: string; image?: string }> {
   const res = await fetch(url, { headers: { "User-Agent": UA, "Accept-Language": "ru,uk,cs,en" }, redirect: "follow" });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const html = await res.text();
@@ -411,5 +419,6 @@ export async function fetchWebPage(url: string): Promise<{ title?: string; text:
     title: og("og:title") ?? document.title,
     text: text.replace(/\s+/g, " ").trim().slice(0, 30000),
     site: og("og:site_name") ?? new URL(url).hostname,
+    image: absUrl(og("og:image") ?? document.querySelector('meta[name="twitter:image"]')?.getAttribute("content") ?? undefined, res.url || url),
   };
 }

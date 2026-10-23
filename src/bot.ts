@@ -11,6 +11,7 @@ import { parseHints } from "./hints.js";
 import { registerUi } from "./ui.js";
 import { registerCard } from "./card.js";
 import { registerReprocess } from "./reprocess.js";
+import { registerResort } from "./resort.js";
 import { textHash, urlHash } from "./dedup.js";
 
 const html = { parse_mode: "HTML" as const, link_preview_options: { is_disabled: true } };
@@ -155,6 +156,7 @@ export function createBot() {
   registerUi(bot);
   registerCard(bot);
   registerReprocess(bot);
+  registerResort(bot);
 
   // Diagnostics for the TikTok download chain: /probe <links…>
   bot.command("probe", async (ctx) => {

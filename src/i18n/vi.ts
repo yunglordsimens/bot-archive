@@ -82,10 +82,10 @@ Bot thả cảm xúc vào tin nhắn của bạn: 👀 đang xử lý → 👌 x
 Mọi thứ đã lưu nằm trong kênh lưu trữ: bài đăng, thẻ trả lời bên dưới, bản ghi.
 Trong chat chỉ có thông báo lỗi (ngắn). Một dòng có liên kết tới bài sau mỗi lần lưu — bật qua /notify.
 
-<b>Lệnh</b> — nút “Menu”
-/recent, /project, /theme, /type — tìm mục · /status — bot và hàng đợi
-/retry — thử lại lỗi · /reprocess — cập nhật mục cũ
-/projects — lĩnh vực của bạn · /notify — thông báo · /lang — ngôn ngữ`,
+<b>Lưu trữ</b> — nút “Lưu trữ” bên trái ô nhập tin: dòng thời gian, bộ lọc, tìm theo nghĩa và theo từ, chủ đề.
+
+<b>Lệnh</b> — /retry thử lại lỗi · /resort sắp xếp lại · /notify thông báo · /lang ngôn ngữ
+Thêm: /status — bot và hàng đợi · /reprocess — cập nhật mục cũ · /projects — lĩnh vực của tôi`,
     chooseThemes: "🗂 Chủ đề — chọn:", chooseTypes: "🏷 Loại — chọn:", chooseProjects: "🧭 Lĩnh vực — chọn:",
     backThemes: "← Chủ đề", backTypes: "← Loại", backProjects: "← Lĩnh vực",
     empty: "chưa có gì", recentTitle: "🕘 Gần đây", statusTitle: "📊 Trạng thái",
@@ -132,9 +132,29 @@ Trong chat chỉ có thông báo lỗi (ngắn). Một dòng có liên kết t�
     reposted: (n) => `📤 <b>đăng lại</b> (không sửa được bài cũ hoặc chưa có bài): ${n}`,
     failed: (n) => `⚠️ <b>thất bại</b>: ${n}`,
   },
+  resort: {
+    usage: (l) => `Mô tả bằng lời cách sắp xếp lại. Ví dụ:
+<code>/resort tách “học tập” thành “khóa học” và “thi cử”</code>
+
+Hiện tại:
+${l}`,
+    thinking: "🧠 đang nghĩ cấu trúc…",
+    proposal: (l) => `<b>Cấu trúc mới</b>
+${l}
+
+Áp dụng và sắp xếp lại tất cả mục?`,
+    apply: "✅ Áp dụng", cancel: "✖️ Hủy", cancelled: "đã hủy", expired: "đề xuất đã hết hạn — gửi lại /resort",
+    failed: "⚠️ không tạo được cấu trúc — thử diễn đạt khác",
+    applied: (l) => `✅ <b>Đã cập nhật cấu trúc</b>
+${l}`,
+    running: "đang sắp xếp lại — chờ báo cáo",
+    start: (n) => `🔀 đang sắp xếp lại ${n}…`, progress: (i, n) => `🔀 đang sắp xếp lại ${i}/${n}…`,
+    done: (c, n, f) => `✅ <b>đã sắp xếp lại</b>: thay đổi ${c}/${n}${f ? ` · ⚠️ lỗi: ${f}` : ""}
+Đã cập nhật chú thích bài trong kênh.`,
+  },
+  menuButton: "Lưu trữ",
   commands: {
-    recent: "10 mục gần nhất", project: "mục theo lĩnh vực", theme: "mục theo chủ đề", type: "mục theo loại",
-    status: "bot, kênh và hàng đợi", retry: "thử lại lỗi và mục chưa có video", reprocess: "cập nhật mục cũ sang định dạng mới",
-    projects: "lĩnh vực của tôi", notify: "một dòng có liên kết tới bài sau khi lưu", lang: "ngôn ngữ", help: "cách dùng",
+    retry: "thử lại lỗi và mục chưa có video", resort: "sắp xếp lại: mô tả bằng lời",
+    lang: "ngôn ngữ", notify: "một dòng có liên kết tới bài sau khi lưu", help: "cách dùng",
   },
 };

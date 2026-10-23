@@ -251,3 +251,49 @@ export async function embed(text: string): Promise<number[]> {
 }
 
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+// /resort (SPEC §5.0): the user describes the structure in words → a new list of life areas and topics.
+export type Structure = { projects: { name: string; hint: string }[]; themes: string[] };
+const structureSchema = {
+  type: Type.OBJECT,
+  properties: {
+    projects: {
+      type: Type.ARRAY,
+      items: { type: Type.OBJECT, properties: { name: { type: Type.STRING }, hint: { type: Type.STRING, description: "What belongs here, a few words" } }, required: ["name", "hint"] },
+    },
+    themes: { type: Type.ARRAY, items: { type: Type.STRING } },
+  },
+  required: ["projects", "themes"],
+};
+
+export async function proposeStructure(instruction: string, current: Structure, language: string): Promise<Structure> {
+  const system = `The user keeps a personal archive sorted by two lists: life areas (projects — where it is useful to them) and topics (themes — what it is about).
+Change the lists as the user asks; keep everything they didn't mention, with the same names. Names short, in ${language} unless the user wrote a name in another language.
+The last entry of each list is the "misc" bucket — keep it last.`;
+  const res = JSON.parse(await generate([textPart(`Current:\n${JSON.stringify(current)}\n\nThe user wants:\n${instruction}`)], system, structureSchema)) as Structure;
+  return fixNewlines(res);
+}
+
+// Re-sorting saved items by their saved gist only (no video, cheap): a batch per call.
+export type Sorted = { id: number; project: string[]; theme: string };
+export async function resortBatch(items: { id: number; title: string | null; summary: string | null; tags: string[] }[], p: Profile): Promise<Sorted[]> {
+  const schema = {
+    type: Type.ARRAY,
+    items: {
+      type: Type.OBJECT,
+      properties: {
+        id: { type: Type.INTEGER },
+        project: { type: Type.ARRAY, items: { type: Type.STRING, enum: Object.keys(p.projects) } },
+        theme: { type: Type.STRING, enum: p.themes },
+      },
+      required: ["id", "project", "theme"],
+    },
+  };
+  const system = `Sort archive items. For each item give:
+- theme — what it is ABOUT, exactly one from the list;
+- project — which of the user's LIFE AREAS it belongs to, 1–3 strictly from the list; if none fits — the last one.
+The user's life areas:
+${Object.entries(p.projects).map(([k, v]) => `  · ${k}${v ? ` — ${v}` : ""}`).join("\n")}
+Return every id once.`;
+  return JSON.parse(await generate([textPart(JSON.stringify(items))], system, schema)) as Sorted[];
+}

@@ -138,7 +138,8 @@ export async function publishToChannel(api: Api, it: Item, pub: Publish, u: User
 }
 
 // Edit the existing post into the current format; if that's impossible, publish anew.
-export async function rewritePost(api: Api, it: Item, u: User): Promise<{ link?: string; reposted: boolean }> {
+// editOnly: never re-post (e.g. /resort only refreshes the header tags).
+export async function rewritePost(api: Api, it: Item, u: User, editOnly = false): Promise<{ link?: string; reposted: boolean }> {
   const target = it.archive_link ? parseLink(it.archive_link) : undefined;
   if (target && it.input_kind !== "video_note") {
     try {
@@ -147,9 +148,11 @@ export async function rewritePost(api: Api, it: Item, u: User): Promise<{ link?:
       return { link: it.archive_link!, reposted: false };
     } catch (e: any) {
       if (String(e?.description ?? e).includes("not modified")) return { link: it.archive_link!, reposted: false };
+      if (editOnly) return { link: it.archive_link!, reposted: false };
       console.warn(`post for item ${it.id} not editable, publishing anew:`, e?.description ?? e);
     }
   }
+  if (editOnly) return { link: it.archive_link ?? undefined, reposted: false };
   const r = await publishToChannel(api, it, undefined, u);
   return { link: r.link, reposted: true };
 }
