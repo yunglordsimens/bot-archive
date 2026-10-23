@@ -31,6 +31,17 @@ function contextText(it: Item, extra: Record<string, string | undefined> = {}) {
   return lines.map(([k, v]) => `${k}: ${v}`).join("\n");
 }
 
+// Archive-channel problems must not lose the item: save it without the original and note why.
+async function safeArchive(fn: () => Promise<{ fileIds: string[]; link?: string }>, patch: Record<string, unknown>) {
+  try {
+    return await fn();
+  } catch (e) {
+    console.warn("archive channel failed", e);
+    patch.raw_meta = { ...(patch.raw_meta as object), archive_error: String((e as Error)?.message ?? e).slice(0, 300) };
+    return { fileIds: [] as string[], link: undefined };
+  }
+}
+
 async function processVideoLink(api: Api, it: Item, f: Fetched): Promise<Result> {
   const parts: Part[] = [textPart(contextText(it, { "Подпись автора": f.caption, "Автор": f.author, "Субтитры автора": f.subtitles }))];
   if (f.video) parts.push(await mediaPart(f.video.buf, f.video.mime));
@@ -42,7 +53,7 @@ async function processVideoLink(api: Api, it: Item, f: Fetched): Promise<Result>
   const patch: Record<string, unknown> = { caption: f.caption, author: f.author, raw_meta: { via: f.via, log: f.log } };
   if (!it.occurred_at && f.date) patch.occurred_at = f.date;
   if (hasMedia) {
-    const a = await archiveUpload(api, f, `${it.source_url}\n${analysis.title}`);
+    const a = await safeArchive(() => archiveUpload(api, f, `${it.source_url}\n${analysis.title}`), patch);
     patch.archive_file_ids = a.fileIds;
     patch.tg_file_id = a.fileIds[0];
     patch.archive_link = a.link;
@@ -101,7 +112,7 @@ async function processItem(api: Api, it: Item): Promise<Result> {
       const parts: Part[] = [textPart(contextText(it, { "Подпись": it.input.text }))];
       parts.push(await mediaPart(buf, it.input.mime ?? "application/octet-stream"));
       const analysis = await analyze(parts);
-      const link = await archiveCopy(api, it.tg_chat_id, it.tg_message_id);
+      const link = (await safeArchive(async () => ({ fileIds: [], link: await archiveCopy(api, it.tg_chat_id, it.tg_message_id) }), {})).link;
       return { analysis, status: "ok", patch: { media_hash: hash, archive_file_ids: [it.input.file_id], archive_link: link } };
     }
   }

@@ -5,10 +5,10 @@ import type { Media } from "./fetchers.js";
 
 const BOT_UPLOAD_LIMIT = 50 * 1024 * 1024;
 
+// Channel the bot detected itself (made admin) wins over ARCHIVE_CHANNEL_ID from .env.
 export async function archiveChannel(): Promise<number | undefined> {
-  if (config.archiveChannelId) return config.archiveChannelId;
   const v = await getSetting("archive_channel_id");
-  return v ? Number(v) : undefined;
+  return v ? Number(v) : config.archiveChannelId;
 }
 
 function link(channelId: number, messageId: number) {
