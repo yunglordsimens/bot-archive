@@ -2,21 +2,22 @@ import { InputFile, type Api } from "grammy";
 import type { Item } from "./db.js";
 import { archiveChannel, archiveUpload, link } from "./archive.js";
 import { esc, typeLabel } from "./format.js";
+import { splitMessages } from "./split.js";
 import { fmtDate, tr, type Dict } from "./i18n/index.js";
 import type { User } from "./users.js";
 import type { Media } from "./fetchers.js";
 
-// Archive-channel post: title, @author, directions · theme · type, summary, «Зачем мне», EN.
-// Transcript goes as a reply under the post (media captions are limited to 1024 chars).
+// Archive-channel post, nothing truncated (SPEC §5.3a):
+// (1) media with a short caption: title · @author · date of the original · directions/topics;
+// (2) reply: text card — summary, «why me», EN, structured in full, comments, original description in full (split by paragraph if long);
+// (3) reply: transcript (.txt if long).
 
 const CAPTION_MAX = 1024;
-const TEXT_MAX = 4096;
 const TRANSCRIPT_INLINE_MAX = 3500;
 
 export type Publish = { kind: "upload"; video?: Media; images?: Media[] } | { kind: "copy" } | undefined;
 
 const visible = (html: string) => html.replace(/<[^>]+>/g, "").replace(/&(lt|gt|amp);/g, "x").length;
-const cut = (s: string, n: number) => (s.length > n ? `${s.slice(0, Math.max(0, n - 1))}…` : s);
 
 const fmtNum = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}K` : String(n));
 
@@ -39,28 +40,42 @@ function profileLine(d: Dict, it: Item) {
   return [p.followers != null && `👥 ${d.post.followers(fmtNum(p.followers))}`, entity].filter(Boolean).join(" · ");
 }
 
-// Post: title · @author · date · directions/themes · summary · «Зачем мне» · EN · original description.
-// No transcript here — it goes as a reply under the post. Long parts shrink until the post fits the limit.
-export function postHtml(it: Item, limit: number, u: User): string {
+// (1) Short header for the media caption (or the first text message).
+export function headerHtml(it: Item, u: User): string {
   const d = tr(u.lang);
   const projects = (it.project ?? []).join(", ");
   const meta = [projects && `🧭 ${esc(projects)}`, it.theme && `🗂 ${esc(it.theme)}`, typeLabel(d, it.content_type)].filter(Boolean).join(" · ");
+  return [`<b>${esc(it.title ?? "")}</b>`, authorLine(d, it), profileLine(d, it), meta].filter(Boolean).join("\n");
+}
+
+// Caption that fits Telegram's limit without cutting text: an absurdly long header moves into the card instead.
+const captionFor = (it: Item, u: User) => {
+  const h = headerHtml(it, u);
+  return visible(h) <= CAPTION_MAX ? h : esc(tr(u.lang).sources[it.input_kind] ?? "📥");
+};
+
+const section = (title: string, items?: string[], numbered = false) =>
+  items?.length ? `<b>${esc(title)}</b>\n${items.map((x, i) => `${numbered ? `${i + 1}.` : "•"} ${esc(x)}`).join("\n")}` : "";
+
+// (2) The text card as blocks; splitMessages packs them into ≤4096-char messages.
+export function cardBlocks(it: Item, u: User): string[] {
+  const d = tr(u.lang);
+  const s = it.structured ?? {};
   const en = u.lang === "en" ? undefined : it.raw_meta?.en; // English users already read it in English
-  const caption = it.caption?.trim();
-  let budget = 1500;
-  for (;;) {
-    const head = [`<b>${esc(cut(it.title ?? "", 200))}</b>`, authorLine(d, it), profileLine(d, it), meta].filter(Boolean).join("\n");
-    const blocks = [
-      head,
-      esc(cut(it.summary ?? "", budget)),
-      it.why_me && `💭 <b>${d.post.why}:</b> ${esc(cut(it.why_me, Math.round(budget / 2)))}`,
-      en && `🇬🇧 <b>${esc(cut(en.title, 150))}</b> — ${esc(cut(en.summary, Math.round(budget * 0.6)))}`,
-      caption && it.input_kind !== "text" && it.input_kind !== "forwarded" && `📝 <i>${esc(cut(caption, Math.round(budget * 0.4)))}</i>`,
-    ].filter(Boolean);
-    const html = blocks.join("\n\n");
-    if (visible(html) <= limit || budget < 60) return html;
-    budget = Math.round(budget * 0.8);
-  }
+  const caption = it.input_kind === "text" || it.input_kind === "forwarded" ? "" : it.caption?.trim();
+  const header = headerHtml(it, u);
+  return [
+    visible(header) > CAPTION_MAX ? header : "",
+    esc(it.summary ?? ""),
+    it.why_me ? `💭 <b>${d.post.why}</b>\n${esc(it.why_me)}` : "",
+    section(d.card.points, s.points),
+    section(d.card.ingredients, s.ingredients),
+    section(d.card.steps, s.steps, true),
+    ...(s.lists ?? []).map((l) => section(l.title, l.items)),
+    it.comments_note ? `💬 <b>${d.card.comments}</b>\n${esc(it.comments_note)}` : "",
+    en ? [`🇬🇧 <b>${esc(en.title)}</b>`, esc(en.summary), en.why_me ? `💭 <b>Why me</b>\n${esc(en.why_me)}` : ""].filter(Boolean).join("\n\n") : "",
+    caption ? `📝 <b>${d.post.description}</b>\n${esc(caption)}` : "",
+  ].filter(Boolean);
 }
 
 function parseLink(l: string): { chat: number; msg: number } | undefined {
@@ -101,15 +116,15 @@ export async function publishToChannel(api: Api, it: Item, pub: Publish, u: User
   const ch = archiveChannel(u);
   if (!ch) return { fileIds: [] };
   if (pub?.kind === "upload" && (pub.video || pub.images?.length)) {
-    return archiveUpload(api, ch, pub, postHtml(it, CAPTION_MAX, u));
+    return archiveUpload(api, ch, pub, captionFor(it, u));
   }
   if (!pub && hasFile(it) && !it.input?.file_id) {
     // Downloaded media already in the channel (TikTok/Reels): re-send by file_id.
-    return { fileIds: [], link: link(ch, await sendByFileId(api, ch, it, postHtml(it, CAPTION_MAX, u))) };
+    return { fileIds: [], link: link(ch, await sendByFileId(api, ch, it, captionFor(it, u))) };
   }
   if (pub?.kind === "copy" || (!pub && hasFile(it))) {
     // File sent to the bot by the user: copy their message (keeps the original type), file_id as fallback.
-    const caption = postHtml(it, CAPTION_MAX, u);
+    const caption = captionFor(it, u);
     if (it.input_kind === "video_note") return { fileIds: [], link: link(ch, await sendByFileId(api, ch, it, caption)) };
     try {
       const m = await api.copyMessage(ch, it.tg_chat_id, it.tg_message_id, { caption, parse_mode: "HTML" });
@@ -118,7 +133,7 @@ export async function publishToChannel(api: Api, it: Item, pub: Publish, u: User
       return { fileIds: [], link: link(ch, await sendByFileId(api, ch, it, caption)) };
     }
   }
-  const m = await api.sendMessage(ch, postHtml(it, TEXT_MAX, u), { parse_mode: "HTML" });
+  const m = await api.sendMessage(ch, headerHtml(it, u), { parse_mode: "HTML" });
   return { fileIds: [], link: link(ch, m.message_id) };
 }
 
@@ -127,8 +142,8 @@ export async function rewritePost(api: Api, it: Item, u: User): Promise<{ link?:
   const target = it.archive_link ? parseLink(it.archive_link) : undefined;
   if (target && it.input_kind !== "video_note") {
     try {
-      if (hasFile(it)) await api.editMessageCaption(target.chat, target.msg, { caption: postHtml(it, CAPTION_MAX, u), parse_mode: "HTML" });
-      else await api.editMessageText(target.chat, target.msg, postHtml(it, TEXT_MAX, u), { parse_mode: "HTML" });
+      if (hasFile(it)) await api.editMessageCaption(target.chat, target.msg, { caption: captionFor(it, u), parse_mode: "HTML" });
+      else await api.editMessageText(target.chat, target.msg, headerHtml(it, u), { parse_mode: "HTML" });
       return { link: it.archive_link!, reposted: false };
     } catch (e: any) {
       if (String(e?.description ?? e).includes("not modified")) return { link: it.archive_link!, reposted: false };
@@ -140,13 +155,14 @@ export async function rewritePost(api: Api, it: Item, u: User): Promise<{ link?:
 }
 
 // Transcript as a reply under the post; long ones as a .txt file. Re-runs edit the existing text reply.
-export async function postTranscript(api: Api, it: Item, postLink: string, u: User): Promise<string | undefined> {
+export async function postTranscript(api: Api, it: Item, postLink: string, u: User, fresh = false): Promise<string | undefined> {
   const title = tr(u.lang).card.transcriptTitle;
   const text = it.raw_text?.trim();
   const post = parseLink(postLink);
   if (!text || !post) return;
   const old = it.raw_meta?.transcript_link ? parseLink(it.raw_meta.transcript_link) : undefined;
-  if (old && old.chat === post.chat) {
+  if (old && fresh) await api.deleteMessage(old.chat, old.msg).catch(() => {}); // keep the order post → card → transcript
+  else if (old && old.chat === post.chat) {
     if (text.length <= TRANSCRIPT_INLINE_MAX) {
       const ok = await api.editMessageText(old.chat, old.msg, `${title}\n\n${text}`).then(() => true, (e) => String(e?.description).includes("not modified"));
       if (ok) return it.raw_meta!.transcript_link;
@@ -161,3 +177,28 @@ export async function postTranscript(api: Api, it: Item, postLink: string, u: Us
   return link(post.chat, m.message_id);
 }
 
+
+// (2) Text card under the post, split into as many messages as needed. Re-runs edit the existing ones,
+// add missing ones and remove extra ones. fresh = the card was created now (the transcript must go after it).
+export async function postCard(api: Api, it: Item, postLink: string, u: User): Promise<{ links: string[]; fresh: boolean }> {
+  const post = parseLink(postLink);
+  if (!post) return { links: [], fresh: false };
+  const texts = splitMessages(cardBlocks(it, u));
+  const old = (it.raw_meta?.card_links ?? []).map(parseLink).filter((x): x is { chat: number; msg: number } => !!x && x.chat === post.chat);
+  const links: string[] = [];
+  for (const [i, text] of texts.entries()) {
+    const o = old[i];
+    if (o) {
+      const ok = await api.editMessageText(o.chat, o.msg, text, { parse_mode: "HTML", link_preview_options: { is_disabled: true } })
+        .then(() => true, (e) => String(e?.description).includes("not modified"));
+      if (ok) {
+        links.push(link(o.chat, o.msg));
+        continue;
+      }
+    }
+    const m = await api.sendMessage(post.chat, text, { parse_mode: "HTML", link_preview_options: { is_disabled: true }, reply_parameters: { message_id: post.msg } });
+    links.push(link(post.chat, m.message_id));
+  }
+  for (const o of old.slice(texts.length)) await api.deleteMessage(o.chat, o.msg).catch(() => {});
+  return { links, fresh: old.length === 0 };
+}

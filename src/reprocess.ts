@@ -4,7 +4,7 @@ import { db, FORMAT_VERSION, updateItem, type Item, type RawMeta } from "./db.js
 import { needsFormatAnalysis, parseHints } from "./hints.js";
 import { analyze, textPart, urlPart } from "./gemini.js";
 import { fetchComments, fetchMeta, fetchWebPage } from "./fetchers.js";
-import { postTranscript, rewritePost } from "./channel.js";
+import { postCard, postTranscript, rewritePost } from "./channel.js";
 import { applyAnalysis } from "./worker.js";
 import { addFormatAnalysis, contextText, originalMedia } from "./analysis.js";
 import { renderCard } from "./card.js";
@@ -70,7 +70,11 @@ async function reprocessItem(api: Api, it: Item, u: User): Promise<{ reposted: b
   const post = await rewritePost(api, full, u);
   if (post.link) {
     full.archive_link = patch.archive_link = post.link;
-    const transcript = await postTranscript(api, full, post.link, u).catch(() => undefined);
+    // A post published anew starts its own reply chain.
+    if (post.reposted) full.raw_meta = { ...full.raw_meta, card_links: undefined, transcript_link: undefined };
+    const card = await postCard(api, full, post.link, u).catch((e) => void log.push(`карточка не опубликована: ${(e as Error).message?.slice(0, 80)}`));
+    if (card) patch.raw_meta = full.raw_meta = { ...(patch.raw_meta as RawMeta), card_links: card.links };
+    const transcript = await postTranscript(api, full, post.link, u, card?.fresh ?? false).catch(() => undefined);
     if (transcript) patch.raw_meta = { ...(patch.raw_meta as RawMeta), transcript_link: transcript };
   }
   await updateItem(it.id, patch);

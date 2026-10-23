@@ -64,7 +64,7 @@ export const vi: Dict = {
       edit: "Dựng phim", why_it_works: "Vì sao hiệu quả", reusable_move: "Thủ thuật để áp dụng",
     },
   },
-  post: { source: "nguồn", why: "Có ích gì cho tôi", followers: (n) => `${n} người theo dõi`, company: "🏢 công ty", person: "🙂 cá nhân" },
+  post: { source: "nguồn", why: "Có ích gì cho tôi", followers: (n) => `${n} người theo dõi`, company: "🏢 công ty", person: "🙂 cá nhân", description: "Mô tả gốc dưới video" },
 
   ui: {
     start: "Chào bạn! Gửi cho mình liên kết, ảnh chụp màn hình, tin nhắn thoại, văn bản — mình sẽ phân tích và lưu lại.\nCác nút ở dưới 👇",

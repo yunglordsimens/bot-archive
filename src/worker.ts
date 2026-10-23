@@ -7,7 +7,7 @@ import { analyze, embed, mediaPart, sleep, textPart, translateCard, urlPart, typ
 import { needsFormatAnalysis, parseHints } from "./hints.js";
 import { addFormatAnalysis, contextText, tgDownload } from "./analysis.js";
 import { fetchComments, fetchMeta, fetchProfile, fetchTikTok, fetchVideoGeneric, fetchWebPage, fetchYouTubeText, profileHandle, resolveTikTok, updateYtdlp, type Fetched } from "./fetchers.js";
-import { postTranscript, publishToChannel, type Publish } from "./channel.js";
+import { postCard, postTranscript, publishToChannel, type Publish } from "./channel.js";
 import { batchMessage, duplicateText, failedText, sourceLabel } from "./format.js";
 import { tr, type Dict } from "./i18n/index.js";
 import { getUserById, miscProject, profileOf, type User } from "./users.js";
@@ -175,6 +175,7 @@ async function finishReply(api: Api, it: Item, u: User) {
     const c = renderCard(it, "short", u);
     await api.editMessageText(it.tg_chat_id, it.reply_message_id, c.text, { parse_mode: "HTML", link_preview_options: { is_disabled: true }, reply_markup: c.kb })
       .catch((e) => { if (!String(e?.description ?? e).includes("not modified")) console.warn("edit reply failed", e); });
+    for (const t of c.more) await api.sendMessage(it.tg_chat_id, t, { parse_mode: "HTML", reply_parameters: { message_id: it.reply_message_id } }).catch(() => {});
     return;
   }
   try {
@@ -227,6 +228,9 @@ async function publishItem(api: Api, it: Item, patch: Record<string, unknown>, p
   if (!posted.link) return;
   patch.archive_link = posted.link;
   if (posted.fileIds.length) Object.assign(patch, { archive_file_ids: posted.fileIds, tg_file_id: posted.fileIds[0] });
+  // Post → text card → transcript, each as a reply under the post (SPEC §5.3a).
+  const card = await postCard(api, full, posted.link, u).catch((e) => void console.warn("card post failed", e));
+  if (card) patch.raw_meta = { ...(patch.raw_meta as RawMeta), card_links: card.links };
   const transcript = await postTranscript(api, { ...full, archive_link: posted.link }, posted.link, u).catch((e) => void console.warn("transcript post failed", e));
   if (transcript) patch.raw_meta = { ...(patch.raw_meta as RawMeta), transcript_link: transcript };
 }

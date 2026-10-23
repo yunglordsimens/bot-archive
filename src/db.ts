@@ -59,7 +59,7 @@ export type ItemInput = {
 
 export type NamedList = { title: string; items: string[] };
 // Bump when the card/post format changes: /reprocess picks up items below this version.
-export const FORMAT_VERSION = 3;
+export const FORMAT_VERSION = 4;
 
 export type Hook = {
   looks_accidental: string; probably_deliberate: string; how_hidden: string; first_seconds: string; visual: string; audio: string;
@@ -71,6 +71,7 @@ export type RawMeta = {
   via?: string; log?: string[]; archive_error?: string; similar?: Similar; en?: CardText; stats?: Stats;
   v?: number;                 // FORMAT_VERSION the item was processed with
   transcript_link?: string;   // transcript reply under the channel post
+  card_links?: string[];      // text card replies under the channel post (SPEC §5.3a)
   reprocess_log?: string[];
   comments?: string[];        // top comments given to Gemini
   author_url?: string;

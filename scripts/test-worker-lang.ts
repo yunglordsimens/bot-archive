@@ -26,12 +26,14 @@ assert.ok(["typografie a písma", "designové reference", "háčky a marketing",
 assert.ok(row.project.every((p: string) => ["práce", "škola", "podnikání", "tvorba", "zdraví a domácnost", "různé"].includes(p)));
 assert.equal(row.stance, "replicate"); // "chci taky" in the text
 assert.ok(row.raw_meta?.en?.title);
-const post = calls.find((c) => c.method === "sendMessage" && c.p.chat_id === -1002)!;
+const inChannel = calls.filter((c) => c.method === "sendMessage" && c.p.chat_id === -1002);
+const post = inChannel[0], card = inChannel.find((c) => c.p.reply_parameters)!;
 assert.ok(post, "post goes to the user's own channel");
-assert.match(post.p.text, /Proč pro mě/);
+assert.doesNotMatch(post.p.text, /Proč pro mě/); // header only
+assert.match(card.p.text, /Proč pro mě/); assert.equal(card.p.reply_parameters.message_id, 70);
 const stages = calls.filter((c) => c.method === "editMessageText" && c.p.chat_id === 777).map((c) => c.p.text.replace(/<[^>]+>/g, ""));
 console.log("chat messages:", stages);
 assert.match(stages[0], /rozebírám/);
-console.log("post in -1002:\n" + post.p.text.replace(/<[^>]+>/g, ""));
+console.log("post in -1002:\n" + post.p.text.replace(/<[^>]+>/g, "") + "\n--- card (reply):\n" + card.p.text.replace(/<[^>]+>/g, ""));
 console.log("✓ Czech user: Czech lists and labels, stance from the hint, EN copy, post in their own channel");
 process.exit(0);

@@ -5,6 +5,7 @@ import { addFormatAnalysis, originalMedia } from "./analysis.js";
 import { esc, resultMessage } from "./format.js";
 import { translateCard } from "./gemini.js";
 import { DICTS, fmtDate, tr, type Dict } from "./i18n/index.js";
+import { splitMessages } from "./split.js";
 import { miscProject, type Ctx, type User } from "./users.js";
 
 // Card on a saved item: one line in chat; buttons open details, transcript, English, corrections and format analysis in place.
@@ -12,28 +13,22 @@ type Mode = "short" | "full" | "en" | "edit" | "format";
 
 const html = { parse_mode: "HTML" as const, link_preview_options: { is_disabled: true } };
 const TRANSCRIPT_INLINE_MAX = 3500;
-const MAX_ITEMS = 30;
-
-const cut = (s: string, n: number) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
 
 function similarLine(d: Dict, s?: Similar) {
   if (!s) return "";
-  return `\n≈ ${d.card.similar}: ${esc(cut(s.summary ?? s.title ?? "", 100))}, ${fmtDate(d, s.created_at)}`;
+  return `\n≈ ${d.card.similar}: ${esc(s.title ?? s.summary ?? "")}, ${fmtDate(d, s.created_at)}`;
 }
 
-function section(d: Dict, title: string, items: string[] | undefined, numbered = false) {
+// Blocks for the expanded card; splitMessages turns them into ≤4096-char messages — nothing is cut.
+function section(title: string, items: string[] | undefined, numbered = false) {
   if (!items?.length) return "";
-  const lines = items.slice(0, MAX_ITEMS).map((x, i) => `${numbered ? `${i + 1}.` : "•"} ${esc(cut(x, 200))}`);
-  if (items.length > MAX_ITEMS) lines.push(d.card.moreItems(items.length - MAX_ITEMS));
-  return `\n\n<b>${esc(title)}</b>\n${lines.join("\n")}`;
+  return `<b>${esc(title)}</b>\n${items.map((x, i) => `${numbered ? `${i + 1}.` : "•"} ${esc(x)}`).join("\n")}`;
 }
 
-function details(d: Dict, s: Structured | null | undefined) {
+function details(d: Dict, s: Structured | null | undefined): string[] {
   s ??= {};
-  return section(d, d.card.points, s.points)
-    + section(d, d.card.ingredients, s.ingredients)
-    + section(d, d.card.steps, s.steps, true)
-    + (s.lists ?? []).map((l) => section(d, l.title, l.items)).join("");
+  return [section(d.card.points, s.points), section(d.card.ingredients, s.ingredients), section(d.card.steps, s.steps, true),
+    ...(s.lists ?? []).map((l) => section(l.title, l.items))];
 }
 
 // Inputs that have a picture/video to look at for the format analysis.
@@ -44,10 +39,9 @@ const HOOK_ORDER: (keyof Hook)[] = [
   "text_on_screen", "emotion", "format", "edit", "why_it_works", "reusable_move",
 ];
 
-function formatView(d: Dict, it: Item) {
+function formatView(d: Dict, it: Item): string[] {
   const h = it.hook!;
-  const lines = HOOK_ORDER.filter((k) => h[k]).map((k) => `<b>${d.card.hook[k]}:</b> ${esc(cut(h[k], 400))}`);
-  return `<b>${d.card.formatTitle}</b> · ${esc(it.title ?? "")}\n\n${lines.join("\n\n")}`;
+  return [`<b>${d.card.formatTitle}</b> · ${esc(it.title ?? "")}`, ...HOOK_ORDER.filter((k) => h[k]).map((k) => `<b>${d.card.hook[k]}</b>\n${esc(h[k])}`)];
 }
 
 function editView(d: Dict, it: Item) {
@@ -80,31 +74,35 @@ function keyboard(d: Dict, it: Item, mode: Mode) {
   return kb;
 }
 
-export function renderCard(it: Item, mode: Mode, u: User): { text: string; kb: InlineKeyboard } {
+// text = what goes into the card message itself; more = continuation messages when the content is longer than one message.
+export function renderCard(it: Item, mode: Mode, u: User): { text: string; kb: InlineKeyboard; more: string[] } {
   const d = tr(u.lang);
   const misc = miscProject(u);
   const stance = it.stance && d.stance[it.stance] ? ` · ${d.stance[it.stance].split(" ")[0]}` : "";
-  const comments = it.comments_note ? `\n💬 ${d.card.comments}: ${esc(cut(it.comments_note, 300))}` : "";
+  const comments = it.comments_note ? `\n💬 ${d.card.comments}: ${esc(it.comments_note)}` : "";
   const similar = similarLine(d, it.raw_meta?.similar) + comments;
   const short = resultMessage(d, it, misc) + stance + similar;
-  let text = short;
-  if (mode === "edit") text = editView(d, it);
-  else if (mode === "format" && it.hook) text = formatView(d, it);
+  let blocks: string[] = [short];
+  if (mode === "edit") blocks = [editView(d, it)];
+  else if (mode === "format" && it.hook) blocks = formatView(d, it);
   else if (mode === "full") {
-    const tags = it.tags?.length ? `\n\n${it.tags.map((t) => `#${t.replace(/\s+/g, "_")}`).join(" ")}` : "";
-    const why = it.why_me ? `\n\n💭 <b>${d.card.why}:</b> ${esc(it.why_me)}` : "";
-    const visual = it.visual_description ? `\n\n🎞 <b>${d.card.inFrame}:</b> ${esc(cut(it.visual_description, 600))}` : "";
     const rel = [it.stance && d.stance[it.stance], ...(it.value_in ?? []).map((v) => d.value[v])].filter(Boolean).join(" · ");
-    const move = it.hook?.reusable_move ? `\n\n🎬 <b>${d.card.move}:</b> ${esc(cut(it.hook.reusable_move, 300))}` : "";
-    text = `<b>${resultMessage(d, it, misc)}</b>${similar}\n\n${esc(it.summary ?? "")}${why}${visual}${move}${details(d, it.structured)}${rel ? `\n\n${rel}` : ""}${tags}`;
+    blocks = [
+      `<b>${resultMessage(d, it, misc)}</b>${similar}`,
+      esc(it.summary ?? ""),
+      it.why_me ? `💭 <b>${d.card.why}</b>\n${esc(it.why_me)}` : "",
+      it.visual_description ? `🎞 <b>${d.card.inFrame}</b>\n${esc(it.visual_description)}` : "",
+      it.hook?.reusable_move ? `🎬 <b>${d.card.move}</b>\n${esc(it.hook.reusable_move)}` : "",
+      ...details(d, it.structured),
+      rel,
+      it.tags?.length ? it.tags.map((t) => `#${t.replace(/\s+/g, "_")}`).join(" ") : "",
+    ];
   } else if (mode === "en" && it.raw_meta?.en) {
     const en = it.raw_meta.en;
-    const why = en.why_me ? `\n\n💭 <b>${DICTS.en.card.why}:</b> ${esc(en.why_me)}` : "";
-    text = `<b>🇬🇧 ${esc(en.title)}</b>\n\n${esc(en.summary)}${why}${details(DICTS.en, en.structured)}`;
+    blocks = [`<b>🇬🇧 ${esc(en.title)}</b>`, esc(en.summary), en.why_me ? `💭 <b>${DICTS.en.card.why}</b>\n${esc(en.why_me)}` : "", ...details(DICTS.en, en.structured)];
   }
-  // Telegram limit is 4096; long lists fall back to the short card + a hint.
-  if (text.length > 4000) text = `${short}\n\n${esc(cut(it.summary ?? "", 1500))}\n\n<i>${d.card.tooLong}</i>`;
-  return { text, kb: keyboard(d, it, mode) };
+  const [text, ...more] = splitMessages(blocks.filter(Boolean));
+  return { text, more, kb: keyboard(d, it, mode) };
 }
 
 // Format analysis by button: original from the archive channel (or the source), runs in the background.
@@ -136,9 +134,12 @@ export function registerCard(bot: Bot<Ctx>) {
     if (!it) await ctx.answerCallbackQuery(tr(ctx.user.lang).card.notFound);
     return it;
   };
-  const edit = (ctx: Ctx, it: Item, mode: Mode) => {
+  const edit = async (ctx: Ctx, it: Item, mode: Mode) => {
     const c = renderCard(it, mode, ctx.user);
-    return ctx.editMessageText(c.text, { ...html, reply_markup: c.kb }).catch(() => {});
+    await ctx.editMessageText(c.text, { ...html, reply_markup: c.kb }).catch(() => {});
+    // Longer than one message: the rest follows as replies, nothing is cut.
+    const msgId = ctx.callbackQuery?.message?.message_id;
+    for (const t of c.more) await ctx.reply(t, { ...html, ...(msgId ? { reply_parameters: { message_id: msgId } } : {}) });
   };
   const show = (mode: Mode) => async (ctx: CallbackQueryContext<Ctx>) => {
     const it = await load(ctx);
@@ -202,7 +203,7 @@ export function registerCard(bot: Bot<Ctx>) {
     if (it.raw_text.length <= TRANSCRIPT_INLINE_MAX) {
       await ctx.reply(`${d.card.transcriptTitle}\n\n${it.raw_text}`, reply);
     } else {
-      await ctx.replyWithDocument(new InputFile(Buffer.from(it.raw_text, "utf8"), `transcript-${it.id}.txt`), { caption: `📜 ${cut(it.title ?? "", 900)}`, ...reply });
+      await ctx.replyWithDocument(new InputFile(Buffer.from(it.raw_text, "utf8"), `transcript-${it.id}.txt`), { caption: `📜 ${it.title ?? ""}`, ...reply });
     }
   });
 }

@@ -64,7 +64,7 @@ export const cs: Dict = {
       edit: "Střih", why_it_works: "Proč to funguje", reusable_move: "Trik pro sebe",
     },
   },
-  post: { source: "zdroj", why: "Proč pro mě", followers: (n) => `${n} sledujících`, company: "🏢 firma", person: "🙂 člověk" },
+  post: { source: "zdroj", why: "Proč pro mě", followers: (n) => `${n} sledujících`, company: "🏢 firma", person: "🙂 člověk", description: "Popisek pod videem" },
 
   ui: {
     start: "Ahoj! Posílej sem odkazy, snímky obrazovky, hlasovky, text — rozeberu a uložím.\nTlačítka dole 👇",

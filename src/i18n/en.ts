@@ -64,7 +64,7 @@ export const en: Dict = {
       edit: "Editing", why_it_works: "Why it works", reusable_move: "Trick to reuse",
     },
   },
-  post: { source: "source", why: "Why me", followers: (n) => `${n} followers`, company: "🏢 company", person: "🙂 person" },
+  post: { source: "source", why: "Why me", followers: (n) => `${n} followers`, company: "🏢 company", person: "🙂 person", description: "Original description" },
 
   ui: {
     start: "Hi! Send me links, screenshots, voice messages, text — I'll analyse and save them.\nButtons below 👇",

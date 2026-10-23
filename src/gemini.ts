@@ -145,8 +145,16 @@ async function generate(parts: Part[], system: string, responseSchema: object): 
   throw lastErr;
 }
 
+// Models sometimes return a literal "\\n" inside strings — turn it into a real line break everywhere.
+function fixNewlines<T>(v: T): T {
+  if (typeof v === "string") return v.replace(/\\n/g, "\n") as T;
+  if (Array.isArray(v)) return v.map(fixNewlines) as T;
+  if (v && typeof v === "object") return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, fixNewlines(x)])) as T;
+  return v;
+}
+
 function validate(raw: string, p: Profile): Analysis {
-  const a = JSON.parse(raw) as Analysis;
+  const a = fixNewlines(JSON.parse(raw) as Analysis);
   if (!a.summary || !a.title) throw new Error("empty summary/title");
   if (!["tip", "recipe", "idea", "funny", "reference", "other"].includes(a.content_type)) a.content_type = "other";
   if (!p.themes.includes(a.theme)) a.theme = p.themes.at(-1)!;
@@ -198,7 +206,7 @@ const cardSchema = {
 export async function translateCard(card: CardText): Promise<CardText> {
   const system = "Translate this archive card into natural English. Keep the same JSON structure and the same number of items. " +
     "For films, books, places and products use their official English names when they exist.";
-  return JSON.parse(await generate([textPart(JSON.stringify(card))], system, cardSchema)) as CardText;
+  return fixNewlines(JSON.parse(await generate([textPart(JSON.stringify(card))], system, cardSchema)) as CardText);
 }
 
 // Deep format analysis (SPEC §3.9) — only when value_in says the form matters, on a caption hint, or by button.
@@ -228,7 +236,7 @@ const HOOK_SYSTEM = `Разбери, как сделано это видео (и
 Запрещены общие места вроде «яркий визуал привлекает внимание», «эмоциональный контент вовлекает» — только конкретные детали этого ролика.`;
 
 export async function analyzeFormat(parts: Part[], language: string): Promise<Hook> {
-  return JSON.parse(await generate(parts, `${HOOK_SYSTEM}\nWrite every field in ${language}.`, hookSchema)) as Hook;
+  return fixNewlines(JSON.parse(await generate(parts, `${HOOK_SYSTEM}\nWrite every field in ${language}.`, hookSchema)) as Hook);
 }
 
 export async function embed(text: string): Promise<number[]> {

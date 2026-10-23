@@ -47,7 +47,7 @@ export type Dict = {
       "first_seconds" | "looks_accidental" | "probably_deliberate" | "how_hidden" | "mismatch" | "visual" | "audio" |
       "text_on_screen" | "emotion" | "format" | "edit" | "why_it_works" | "reusable_move", string>;
   };
-  post: { source: string; why: string; followers: Fn1; company: string; person: string };
+  post: { source: string; why: string; followers: Fn1; company: string; person: string; description: string };
 
   ui: {
     start: string; startNoChannel: string; help: (b: Dict["btn"]) => string;
