@@ -33,6 +33,7 @@ export const en: Dict = {
   tooBigN: (n) => `${n} too big (>20 MB)`,
   dbDown: (hint) => `❌ not saved: database unavailable (${hint})`,
   dbBadKey: "wrong SUPABASE_SERVICE_ROLE_KEY in .env",
+  unknownCommand: "unknown command — see /help",
 
   stage: {
     download: "⬇️ downloading…", read: "🔎 reading…", think: "🧠 analysing…", thinkVideo: "🧠 analysing the video…", thinkImages: "🧠 analysing the images…",
@@ -133,24 +134,22 @@ Also: /status — bot and queue · /reprocess — update old items · /projects 
     failed: (n) => `⚠️ <b>failed</b>: ${n}`,
   },
   resort: {
-    usage: (l) => `Describe in words how to re-sort. For example:
-<code>/resort split “study” into “courses” and “exams”</code>
+    usage: (l) => `Describe how to re-sort — any language, several instructions at once: split, merge, rename, translate all names, add a topic, “pull X out of everything”, “suggest yourself”. For example:
+<code>/resort split “health & home” into stomach, head, sport, food</code>
 
 Now:
 ${l}`,
     thinking: "🧠 thinking about the structure…",
-    proposal: (l) => `<b>New structure</b>
-${l}
-
-Apply and re-sort all items?`,
-    apply: "✅ Apply", cancel: "✖️ Cancel", cancelled: "cancelled", expired: "the proposal expired — send /resort again",
-    failed: "⚠️ couldn't build the structure — try wording it differently",
-    applied: (l) => `✅ <b>Structure updated</b>
-${l}`,
-    running: "re-sorting is already running — wait for the report",
-    start: (n) => `🔀 re-sorting ${n}…`, progress: (i, n) => `🔀 re-sorting ${i}/${n}…`,
-    done: (c, n, f) => `✅ <b>re-sorted</b>: ${c} of ${n} changed${f ? ` · ⚠️ failed: ${f}` : ""}
-Channel post captions updated.`,
+    counting: (i, n) => `📦 counting how many items move… ${i}/${n}`,
+    proposalTitle: "New structure", changesTitle: "What changes",
+    moved: (n, t) => `Moving: ${n} of ${t} items`, renamedOnly: (n) => `new name only: ${n}`, lost: (l) => `no new place for: ${l} — their items get sorted by meaning`,
+    confirm: "Apply? Items get re-sorted, channel post captions get updated.",
+    apply: "✅ Apply", cancel: "✖️ Cancel", cancelled: "cancelled, nothing changed", expired: "the proposal expired — send /resort again",
+    failed: (r) => `⚠️ didn't work: ${r}
+Try again or word it differently.`,
+    emptyLists: "the model returned an empty list", running: "re-sorting is already running — wait for the report",
+    progress: (i, n) => `🔀 re-sorting ${i}/${n}…`,
+    done: (c, n) => `✅ <b>Done</b>: ${c} of ${n} items changed, channel post captions updated.`,
   },
   menuButton: "Archive",
   commands: {

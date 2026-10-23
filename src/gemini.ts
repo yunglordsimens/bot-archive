@@ -252,48 +252,98 @@ export async function embed(text: string): Promise<number[]> {
 
 export const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
-// /resort (SPEC §5.0): the user describes the structure in words → a new list of life areas and topics.
-export type Structure = { projects: { name: string; hint: string }[]; themes: string[] };
-const structureSchema = {
+// /resort (SPEC §5.0): any wording, any language, several instructions at once → the full new structure + what changes.
+// from: the current names whose items go here (rename / translate / merge = one or more old names; split = the same old
+// name in several new categories; [] = a new category, items are picked from everything).
+// overlay (life areas only): a cross-cutting area added on top — items keep their other areas.
+export type Category = { name: string; hint: string; from: string[]; overlay?: boolean };
+export type Plan = { projects: Category[]; themes: Category[]; changes: string[]; problem: string };
+
+const categorySchema = (overlay: boolean) => ({
+  type: Type.ARRAY,
+  items: {
+    type: Type.OBJECT,
+    properties: {
+      name: { type: Type.STRING },
+      hint: { type: Type.STRING, description: "What belongs here, a few words" },
+      from: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Current names (exactly as given) whose items go here; [] for a brand-new category" },
+      ...(overlay ? { overlay: { type: Type.BOOLEAN, description: "true = cross-cutting area added on top of the item's other areas" } } : {}),
+    },
+    required: ["name", "hint", "from"],
+  },
+});
+const planSchema = {
   type: Type.OBJECT,
   properties: {
-    projects: {
-      type: Type.ARRAY,
-      items: { type: Type.OBJECT, properties: { name: { type: Type.STRING }, hint: { type: Type.STRING, description: "What belongs here, a few words" } }, required: ["name", "hint"] },
-    },
-    themes: { type: Type.ARRAY, items: { type: Type.STRING } },
+    projects: categorySchema(true),
+    themes: categorySchema(false),
+    changes: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Each change in one short line, in the user's interface language" },
+    problem: { type: Type.STRING, description: "Empty if done; otherwise why the request can't be done, in the user's interface language" },
   },
-  required: ["projects", "themes"],
+  required: ["projects", "themes", "changes", "problem"],
 };
 
-export async function proposeStructure(instruction: string, current: Structure, language: string): Promise<Structure> {
-  const system = `The user keeps a personal archive sorted by two lists: life areas (projects — where it is useful to them) and topics (themes — what it is about).
-Change the lists as the user asks; keep everything they didn't mention, with the same names. Names short, in ${language} unless the user wrote a name in another language.
-The last entry of each list is the "misc" bucket — keep it last.`;
-  const res = JSON.parse(await generate([textPart(`Current:\n${JSON.stringify(current)}\n\nThe user wants:\n${instruction}`)], system, structureSchema)) as Structure;
-  return fixNewlines(res);
+export type Current = { projects: { name: string; hint: string; items: number }[]; themes: { name: string; items: number }[] };
+
+export async function planStructure(instruction: string, current: Current, uiLanguage: string): Promise<Plan> {
+  const system = `You reorganise the categories of a personal archive. Every item has:
+- theme — exactly ONE: what the item is ABOUT;
+- project — one or more of the user's LIFE AREAS: where it is useful to them.
+You get the current lists (with item counts; some names may be leftovers in another language) and the user's request in any language. The request may hold several instructions: split, merge, rename, translate all names, add a category, "pull X out of everything", "suggest yourself".
+Return the COMPLETE new lists:
+- Every current name with items must appear in "from" of at least one new category, so no item is lost.
+- Rename / translate / merge: the new category's "from" lists the old name(s).
+- Split: several new categories list the same old name in "from"; give each a clear hint.
+- A brand-new category: "from": [] — items will be picked from everything.
+- "Pull X out of everything" / a cross-cutting topic on top of the rest: put it into projects with "overlay": true and "from": [] — items keep their other areas and get X in addition.
+- If the user asks you to suggest more — add a few well-fitting categories yourself and say so in "changes".
+- Keep what the user didn't mention, with the same names (unless they asked to translate everything).
+- Names short. If the user asks to translate everything, translate every name, including leftovers in other languages (merge duplicates).
+- The last entry of each list is the "misc" bucket — keep it last.
+"changes": one short line per change, in ${uiLanguage}. "problem": empty, or why it can't be done, in ${uiLanguage}.`;
+  const raw = await generate([textPart(`Current:\n${JSON.stringify(current, null, 1)}\n\nThe user's request:\n${instruction}`)], system, planSchema);
+  try {
+    return fixNewlines(JSON.parse(raw) as Plan);
+  } catch (e) {
+    console.warn("resort: unreadable model answer (JSON):", raw);
+    throw e;
+  }
 }
 
-// Re-sorting saved items by their saved gist only (no video, cheap): a batch per call.
-export type Sorted = { id: number; project: string[]; theme: string };
-export async function resortBatch(items: { id: number; title: string | null; summary: string | null; tags: string[] }[], p: Profile): Promise<Sorted[]> {
+// Only the questions the mapping can't answer by itself go to the model, by saved gist (no video, cheap).
+export type SortQuestion = {
+  id: number; title: string | null; summary: string | null; tags: string[];
+  theme_from?: string[];    // pick exactly one theme from these
+  projects_from?: string[]; // pick zero or more areas from these (the item's other areas are already known)
+  overlays?: string[];      // cross-cutting areas: add each one only if the item is really about it
+};
+export type SortAnswer = { id: number; theme?: string; projects?: string[]; overlays?: string[] };
+
+export async function sortItems(items: SortQuestion[], hints: Record<string, string>): Promise<SortAnswer[]> {
   const schema = {
     type: Type.ARRAY,
     items: {
       type: Type.OBJECT,
       properties: {
         id: { type: Type.INTEGER },
-        project: { type: Type.ARRAY, items: { type: Type.STRING, enum: Object.keys(p.projects) } },
-        theme: { type: Type.STRING, enum: p.themes },
+        theme: { type: Type.STRING },
+        projects: { type: Type.ARRAY, items: { type: Type.STRING } },
+        overlays: { type: Type.ARRAY, items: { type: Type.STRING } },
       },
-      required: ["id", "project", "theme"],
+      required: ["id"],
     },
   };
-  const system = `Sort archive items. For each item give:
-- theme — what it is ABOUT, exactly one from the list;
-- project — which of the user's LIFE AREAS it belongs to, 1–3 strictly from the list; if none fits — the last one.
-The user's life areas:
-${Object.entries(p.projects).map(([k, v]) => `  · ${k}${v ? ` — ${v}` : ""}`).join("\n")}
+  const system = `Sort archive items by their saved title, summary and tags. For each item answer only what is asked:
+- theme_from given → "theme": exactly one name from theme_from (what the item is ABOUT);
+- projects_from given → "projects": the names from projects_from where the item is useful (may be empty);
+- overlays given → "overlays": only those the item is clearly about (often none).
+Use names exactly as given. Category descriptions: ${JSON.stringify(hints)}
 Return every id once.`;
-  return JSON.parse(await generate([textPart(JSON.stringify(items))], system, schema)) as Sorted[];
+  const raw = await generate([textPart(JSON.stringify(items))], system, schema);
+  try {
+    return JSON.parse(raw) as SortAnswer[];
+  } catch (e) {
+    console.warn("resort: unreadable model answer (JSON):", raw.slice(0, 2000));
+    throw e;
+  }
 }

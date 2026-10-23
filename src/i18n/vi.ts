@@ -33,6 +33,7 @@ export const vi: Dict = {
   tooBigN: (n) => `${n} quá lớn (>20 MB)`,
   dbDown: (hint) => `❌ chưa lưu: cơ sở dữ liệu không truy cập được (${hint})`,
   dbBadKey: "SUPABASE_SERVICE_ROLE_KEY trong .env không đúng",
+  unknownCommand: "lệnh không xác định — xem /help",
 
   stage: {
     download: "⬇️ đang tải…", read: "🔎 đang đọc…", think: "🧠 đang phân tích…", thinkVideo: "🧠 đang phân tích video…", thinkImages: "🧠 đang phân tích ảnh…",
@@ -133,24 +134,22 @@ Thêm: /status — bot và hàng đợi · /reprocess — cập nhật mục cũ
     failed: (n) => `⚠️ <b>thất bại</b>: ${n}`,
   },
   resort: {
-    usage: (l) => `Mô tả bằng lời cách sắp xếp lại. Ví dụ:
+    usage: (l) => `Mô tả cách sắp xếp lại — bằng bất kỳ ngôn ngữ nào, nhiều yêu cầu cùng lúc: tách, gộp, đổi tên, dịch mọi tên, thêm chủ đề, “tách X ra khỏi tất cả”, “tự đề xuất”. Ví dụ:
 <code>/resort tách “học tập” thành “khóa học” và “thi cử”</code>
 
 Hiện tại:
 ${l}`,
     thinking: "🧠 đang nghĩ cấu trúc…",
-    proposal: (l) => `<b>Cấu trúc mới</b>
-${l}
-
-Áp dụng và sắp xếp lại tất cả mục?`,
-    apply: "✅ Áp dụng", cancel: "✖️ Hủy", cancelled: "đã hủy", expired: "đề xuất đã hết hạn — gửi lại /resort",
-    failed: "⚠️ không tạo được cấu trúc — thử diễn đạt khác",
-    applied: (l) => `✅ <b>Đã cập nhật cấu trúc</b>
-${l}`,
-    running: "đang sắp xếp lại — chờ báo cáo",
-    start: (n) => `🔀 đang sắp xếp lại ${n}…`, progress: (i, n) => `🔀 đang sắp xếp lại ${i}/${n}…`,
-    done: (c, n, f) => `✅ <b>đã sắp xếp lại</b>: thay đổi ${c}/${n}${f ? ` · ⚠️ lỗi: ${f}` : ""}
-Đã cập nhật chú thích bài trong kênh.`,
+    counting: (i, n) => `📦 đang đếm số mục sẽ chuyển… ${i}/${n}`,
+    proposalTitle: "Cấu trúc mới", changesTitle: "Thay đổi",
+    moved: (n, t) => `Sẽ chuyển: ${n}/${t} mục`, renamedOnly: (n) => `chỉ đổi tên: ${n}`, lost: (l) => `không có chỗ mới cho: ${l} — các mục sẽ được xếp theo nghĩa`,
+    confirm: "Áp dụng? Các mục sẽ được sắp xếp lại, chú thích bài trong kênh được cập nhật.",
+    apply: "✅ Áp dụng", cancel: "✖️ Hủy", cancelled: "đã hủy, không có gì thay đổi", expired: "đề xuất đã hết hạn — gửi lại /resort",
+    failed: (r) => `⚠️ không được: ${r}
+Thử lại hoặc diễn đạt khác.`,
+    emptyLists: "mô hình trả về danh sách rỗng", running: "đang sắp xếp lại — chờ báo cáo",
+    progress: (i, n) => `🔀 đang sắp xếp lại ${i}/${n}…`,
+    done: (c, n) => `✅ <b>Xong</b>: thay đổi ${c}/${n} mục, đã cập nhật chú thích trong kênh.`,
   },
   menuButton: "Lưu trữ",
   commands: {

@@ -153,6 +153,20 @@ export function createBot() {
     await next();
   });
 
+  // A command in backticks («`/resort …`», copied from a code block) works like the plain command.
+  bot.use(async (ctx, next) => {
+    const m = ctx.message;
+    const tick = m?.text?.match(/^\s*(`{1,3})\s*(\/[A-Za-z0-9_]+(?:@\w+)?)/);
+    if (m?.text && tick) {
+      let rest = m.text.trimStart().slice(tick[1].length).trimStart();
+      const close = rest.indexOf(tick[1]);
+      if (close >= 0) rest = rest.slice(0, close).trimEnd() + " " + rest.slice(close + tick[1].length).trimStart();
+      m.text = rest.trim();
+      m.entities = [{ type: "bot_command", offset: 0, length: tick[2].length }];
+    }
+    await next();
+  });
+
   registerUi(bot);
   registerCard(bot);
   registerReprocess(bot);
@@ -177,6 +191,8 @@ export function createBot() {
 
   bot.on("message", async (ctx) => {
     const m = ctx.message;
+    // Unknown /commands are not saved as items.
+    if (m.text?.startsWith("/")) return ctx.reply(tr(ctx.user.lang).unknownCommand, { reply_parameters: { message_id: m.message_id } });
     const file = fileOf(m);
 
     if (file) {

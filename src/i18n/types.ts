@@ -25,6 +25,7 @@ export type Dict = {
   tooBigN: Fn1;
   dbDown: Fn1;
   dbBadKey: string;
+  unknownCommand: string;
 
   stage: {
     download: string; read: string; think: string; thinkVideo: string; thinkImages: string; noVideo: string; format: string;
@@ -67,8 +68,10 @@ export type Dict = {
     done: (ok: number, n: number) => string; edited: Fn1; reposted: Fn1; failed: Fn1;
   };
   resort: {
-    usage: Fn1; thinking: string; proposal: Fn1; apply: string; cancel: string; cancelled: string; expired: string; failed: string;
-    applied: Fn1; running: string; start: Fn1; progress: (i: number, n: number) => string; done: (changed: number, n: number, failed: number) => string;
+    usage: Fn1; thinking: string; counting: (i: number, n: number) => string; proposalTitle: string; changesTitle: string;
+    moved: (n: number, total: number) => string; renamedOnly: Fn1; lost: Fn1; confirm: string; apply: string; cancel: string;
+    cancelled: string; expired: string; failed: Fn1; emptyLists: string; running: string;
+    progress: (i: number, n: number) => string; done: (changed: number, n: number) => string;
   };
   menuButton: string; // the "Menu" button that opens the Mini App
   // Only these go to the command menu; the rest (/recent, /status, /reprocess, /projects…) still work when typed.

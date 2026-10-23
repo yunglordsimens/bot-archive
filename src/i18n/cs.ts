@@ -33,6 +33,7 @@ export const cs: Dict = {
   tooBigN: (n) => `${n} příliš velké (>20 MB)`,
   dbDown: (hint) => `❌ neuloženo: databáze není dostupná (${hint})`,
   dbBadKey: "špatný SUPABASE_SERVICE_ROLE_KEY v .env",
+  unknownCommand: "neznámý příkaz — seznam v /help",
 
   stage: {
     download: "⬇️ stahuji…", read: "🔎 čtu…", think: "🧠 rozebírám…", thinkVideo: "🧠 rozebírám video…", thinkImages: "🧠 rozebírám obrázky…",
@@ -133,24 +134,22 @@ Také: /status — bot a fronta · /reprocess — aktualizovat staré záznamy �
     failed: (n) => `⚠️ <b>nepovedlo se</b>: ${n}`,
   },
   resort: {
-    usage: (l) => `Popiš slovy, jak přetřídit. Například:
+    usage: (l) => `Popiš slovy, jak přetřídit — v jakémkoli jazyce, klidně víc pokynů najednou: rozdělit, sloučit, přejmenovat, přeložit všechny názvy, přidat téma, „vytáhni X ze všeho“, „navrhni sám“. Například:
 <code>/resort rozděl „studium“ na „UMPRUM“ a „státnice“</code>
 
 Teď:
 ${l}`,
     thinking: "🧠 přemýšlím o struktuře…",
-    proposal: (l) => `<b>Nová struktura</b>
-${l}
-
-Použít a přetřídit všechny záznamy?`,
-    apply: "✅ Použít", cancel: "✖️ Zrušit", cancelled: "zrušeno", expired: "návrh už neplatí — pošli /resort znovu",
-    failed: "⚠️ strukturu se nepodařilo sestavit — zkus to formulovat jinak",
-    applied: (l) => `✅ <b>Struktura aktualizována</b>
-${l}`,
-    running: "přetřídění už běží — počkej na zprávu",
-    start: (n) => `🔀 přetřiďuji ${n}…`, progress: (i, n) => `🔀 přetřiďuji ${i}/${n}…`,
-    done: (c, n, f) => `✅ <b>přetříděno</b>: změněno ${c} z ${n}${f ? ` · ⚠️ nepovedlo se: ${f}` : ""}
-Popisky příspěvků v kanálu aktualizovány.`,
+    counting: (i, n) => `📦 počítám, kolik záznamů se přesune… ${i}/${n}`,
+    proposalTitle: "Nová struktura", changesTitle: "Co se mění",
+    moved: (n, t) => `Přesune se: ${n} z ${t} záznamů`, renamedOnly: (n) => `jen nový název: ${n}`, lost: (l) => `bez nového místa: ${l} — jejich záznamy se rozřadí podle smyslu`,
+    confirm: "Použít? Záznamy se přetřídí, popisky příspěvků v kanálu se aktualizují.",
+    apply: "✅ Použít", cancel: "✖️ Zrušit", cancelled: "zrušeno, nic se nezměnilo", expired: "návrh už neplatí — pošli /resort znovu",
+    failed: (r) => `⚠️ nepovedlo se: ${r}
+Zkus to znovu nebo jinak.`,
+    emptyLists: "model vrátil prázdný seznam", running: "přetřídění už běží — počkej na zprávu",
+    progress: (i, n) => `🔀 přetřiďuji ${i}/${n}…`,
+    done: (c, n) => `✅ <b>Hotovo</b>: změněno ${c} z ${n} záznamů, popisky v kanálu aktualizovány.`,
   },
   menuButton: "Archiv",
   commands: {
