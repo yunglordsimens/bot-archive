@@ -2,9 +2,11 @@ import { createHash } from "node:crypto";
 import { InlineKeyboard, type Api } from "grammy";
 import type { Part } from "@google/genai";
 import { config } from "./config.js";
-import { claimItems, db, findByHash, updateItem, type Item, type RawMeta, type Similar } from "./db.js";
+import { claimItems, db, findByHash, FORMAT_VERSION, updateItem, type Item, type RawMeta, type Similar } from "./db.js";
 import { analyze, embed, mediaPart, sleep, textPart, translateCard, urlPart, type Analysis } from "./gemini.js";
-import { fetchStats, fetchTikTok, fetchVideoGeneric, fetchWebPage, fetchYouTubeText, updateYtdlp, type Fetched } from "./fetchers.js";
+import { needsFormatAnalysis, parseHints } from "./hints.js";
+import { addFormatAnalysis, contextText, tgDownload } from "./analysis.js";
+import { fetchComments, fetchMeta, fetchProfile, fetchTikTok, fetchVideoGeneric, fetchWebPage, fetchYouTubeText, profileHandle, resolveTikTok, updateYtdlp, type Fetched } from "./fetchers.js";
 import { postTranscript, publishToChannel, type Publish } from "./channel.js";
 import { batchMessage, duplicateText, failedText, sourceLabel } from "./format.js";
 import { renderCard } from "./card.js";
@@ -12,25 +14,12 @@ import { renderCard } from "./card.js";
 const DAY = 24 * 3600 * 1000;
 const MAX_MEDIA_RETRIES = 7;
 
-type Result = { analysis: Analysis; patch: Record<string, unknown>; status: "ok" | "pending_media" | "duplicate"; publish?: Publish };
+// media: the parts Gemini saw — reused for the deep format analysis without downloading again.
+type Result = { analysis: Analysis; patch: Record<string, unknown>; status: "ok" | "pending_media" | "duplicate"; publish?: Publish; media?: Part[] };
 
-export async function tgDownload(api: Api, fileId: string): Promise<Buffer> {
-  const f = await api.getFile(fileId);
-  const res = await fetch(`https://api.telegram.org/file/bot${config.botToken}/${f.file_path}`);
-  if (!res.ok) throw new Error(`tg file HTTP ${res.status}`);
-  return Buffer.from(await res.arrayBuffer());
-}
-
-export function contextText(it: Item, extra: Record<string, string | undefined> = {}) {
-  const lines = Object.entries({
-    "Источник": it.origin && it.origin !== "telegram" ? it.origin : it.input_kind,
-    "Ссылка": it.source_url ?? undefined,
-    "Комментарий пользователя": it.input.text && it.source_url ? it.input.text : undefined,
-    "Переслано от": it.origin_detail ?? undefined,
-    ...extra,
-  }).filter(([, v]) => v);
-  return lines.map(([k, v]) => `${k}: ${v}`).join("\n");
-}
+const commentsText = (c: string[]) => (c.length ? c.join("\n") : undefined);
+const profileUrl = (origin: string | null, handle?: string) =>
+  handle && origin === "tiktok" ? `https://www.tiktok.com/@${handle}` : handle && origin === "instagram" ? `https://www.instagram.com/${handle}/` : undefined;
 
 // Archive-channel problems must not lose the item: save it without the original and note why.
 async function safeArchive(fn: () => Promise<{ fileIds: string[]; link?: string }>, patch: Record<string, unknown>) {
@@ -49,42 +38,63 @@ async function stage(api: Api, it: Item, text: string) {
   await api.editMessageText(it.tg_chat_id, it.reply_message_id, `${sourceLabel(it.input_kind, it.origin)} · ${text}`).catch(() => {});
 }
 
-async function processVideoLink(api: Api, it: Item, f: Fetched): Promise<Result> {
-  const parts: Part[] = [textPart(contextText(it, { "Подпись автора": f.caption, "Автор": f.author, "Субтитры автора": f.subtitles }))];
-  if (f.video) parts.push(await mediaPart(f.video.buf, f.video.mime));
-  for (const img of f.images ?? []) parts.push(await mediaPart(img.buf, img.mime));
+async function processVideoLink(api: Api, it: Item, f: Fetched, commentsP: Promise<string[]>): Promise<Result> {
+  const comments = await commentsP;
+  const media: Part[] = [];
+  if (f.video) media.push(await mediaPart(f.video.buf, f.video.mime));
+  for (const img of f.images ?? []) media.push(await mediaPart(img.buf, img.mime));
+  const parts: Part[] = [textPart(contextText(it, {
+    "Описание под видео (подпись автора)": f.caption, "Автор": f.author, "Субтитры автора": f.subtitles, "Топ-комментарии": commentsText(comments),
+  })), ...media];
   const hasMedia = !!(f.video || f.images?.length);
   await stage(api, it, hasMedia ? `🧠 разбираю ${f.images?.length ? "картинки" : "видео"}…` : "🧠 видео не скачалось, разбираю подпись…");
   if (!hasMedia) parts.push(textPart("Видео не удалось скачать — опирайся только на подпись и автора."));
 
   const analysis = await analyze(parts);
-  const patch: Record<string, unknown> = { caption: f.caption, author: f.author, raw_meta: { via: f.via, log: f.log, stats: f.stats } };
+  const patch: Record<string, unknown> = { caption: f.caption, author: f.author, raw_meta: {
+    via: f.via, log: f.log, stats: f.stats, comments, author_url: f.authorUrl ?? profileUrl(it.origin, f.author), published_at: f.stats?.published_at ?? f.date,
+  } };
   if (!it.occurred_at && f.date) patch.occurred_at = f.date;
   if (hasMedia) patch.next_retry_at = null;
   else patch.next_retry_at = it.attempts < MAX_MEDIA_RETRIES ? new Date(Date.now() + DAY).toISOString() : null;
-  return { analysis, patch, status: hasMedia ? "ok" : "pending_media", publish: hasMedia ? { kind: "upload", video: f.video, images: f.images } : undefined };
+  return { analysis, patch, status: hasMedia ? "ok" : "pending_media", publish: hasMedia ? { kind: "upload", video: f.video, images: f.images } : undefined, media };
 }
 
 async function processItem(api: Api, it: Item): Promise<Result> {
   const kind = it.input_kind === "link" ? it.origin : it.input_kind;
   switch (kind) {
-    case "tiktok":
-      return processVideoLink(api, it, await fetchTikTok(it.source_url!));
-    case "instagram":
-      return processVideoLink(api, it, await fetchVideoGeneric(it.source_url!));
+    case "tiktok": {
+      // A shared TikTok link can point to a profile, not a video.
+      const r = await resolveTikTok(it.source_url!);
+      if (!r.id && profileHandle(r.url)) return processProfile(api, { ...it, source_url: r.url });
+      const comments = fetchComments(it.source_url!, "tiktok"); // in parallel with the download
+      return processVideoLink(api, it, await fetchTikTok(it.source_url!), comments);
+    }
+    case "instagram": {
+      const comments = fetchComments(it.source_url!, "instagram");
+      return processVideoLink(api, it, await fetchVideoGeneric(it.source_url!), comments);
+    }
+    case "profile":
+      return processProfile(api, it);
 
     case "youtube": {
-      const stats = fetchStats(it.source_url!); // in parallel with Gemini
+      const meta = fetchMeta(it.source_url!); // in parallel with Gemini
+      const comments = await fetchComments(it.source_url!, "youtube");
+      const ytPatch = async () => {
+        const m = await meta;
+        return { author: m?.author, raw_meta: { stats: m?.stats, comments, author_url: m?.authorUrl, published_at: m?.stats?.published_at } };
+      };
       try {
-        const analysis = await analyze([textPart(contextText(it)), urlPart(it.source_url!)]);
-        return { analysis, patch: { raw_meta: { stats: await stats } }, status: "ok" };
+        const media = [urlPart(it.source_url!)];
+        const analysis = await analyze([textPart(contextText(it, { "Топ-комментарии": commentsText(comments) })), ...media]);
+        return { analysis, patch: await ytPatch(), status: "ok", media };
       } catch (e) {
         console.warn(`youtube direct failed for ${it.id}, falling back to subs`, e);
         const y = await fetchYouTubeText(it.source_url!);
         const analysis = await analyze([textPart(contextText(it, {
           "Название": y.title, "Канал": y.author, "Описание": y.description?.slice(0, 3000), "Субтитры": y.subs,
         }))]);
-        return { analysis, patch: { author: y.author, caption: y.title, raw_meta: { stats: await stats } }, status: "ok" };
+        return { analysis, patch: { ...(await ytPatch()), author: y.author, caption: y.title }, status: "ok" };
       }
     }
 
@@ -111,12 +121,36 @@ async function processItem(api: Api, it: Item): Promise<Result> {
             patch: { media_hash: hash, duplicate_of: dup.id, title: dup.title, kind: dup.kind } };
         }
       }
-      const parts: Part[] = [textPart(contextText(it, { "Подпись": it.input.text }))];
-      parts.push(await mediaPart(buf, it.input.mime ?? "application/octet-stream"));
-      const analysis = await analyze(parts);
-      return { analysis, status: "ok", patch: { media_hash: hash, archive_file_ids: [it.input.file_id] }, publish: { kind: "copy" } };
+      const media = [await mediaPart(buf, it.input.mime ?? "application/octet-stream")];
+      const analysis = await analyze([textPart(contextText(it, { "Подпись": it.input.text })), ...media]);
+      return { analysis, status: "ok", patch: { media_hash: hash, archive_file_ids: [it.input.file_id] }, publish: { kind: "copy" }, media };
     }
   }
+}
+
+// Profile / account (SPEC §5.3a): a link (public data) or a screenshot of the profile grid.
+async function processProfile(api: Api, it: Item): Promise<Result> {
+  const extra: Record<string, string | undefined> = { "Тип записи": "профиль / аккаунт" };
+  const patch: Record<string, unknown> = {};
+  const media: Part[] = [];
+  if (it.input?.file_id) {
+    media.push(await mediaPart(await tgDownload(api, it.input.file_id), it.input.mime ?? "image/jpeg"));
+    patch.archive_file_ids = [it.input.file_id];
+  } else {
+    const p = await fetchProfile(it.source_url!);
+    Object.assign(extra, {
+      "Платформа": p.platform, "Имя": p.name, "Ник": p.handle, "Био": p.bio,
+      "Подписчики": p.followers?.toString(), "Подписки": p.following?.toString(), "Постов/видео": p.posts?.toString(), "Лайков всего": p.likes?.toString(),
+      "Последние посты": p.recent?.join("; "), "Данные страницы": p.raw,
+    });
+    patch.author = p.handle ?? p.name;
+    patch.source_url = it.source_url;
+    patch.raw_meta = { author_url: it.source_url, profile: { followers: p.followers, following: p.following, posts: p.posts, likes: p.likes, bio: p.bio, platform: p.platform, verified: p.verified } };
+  }
+  const analysis = await analyze([textPart(contextText(it, extra)), ...media]);
+  const meta = (patch.raw_meta ?? {}) as RawMeta;
+  patch.raw_meta = { ...meta, profile: { ...meta.profile, entity: analysis.entity } };
+  return { analysis, patch, status: "ok", publish: media.length ? { kind: "copy" } : undefined, media };
 }
 
 async function finishReply(api: Api, it: Item) {
@@ -159,12 +193,16 @@ export async function nearest(embedding: string, id: number): Promise<Similar | 
 
 // Analysis → item fields, embedding, "похоже на", EN translation (for the channel post and the EN button).
 export async function applyAnalysis(it: Item, a: Analysis, patch: Record<string, unknown>) {
+  const hints = parseHints(it.input?.text);
   Object.assign(patch, {
     title: a.title, summary: a.summary, content_type: a.content_type, kind: a.kind, why_me: a.why_me,
+    visual_description: a.visual_description, comments_note: a.comments_note || null,
+    // Caption hints beat the model's guess.
+    value_in: hints.value_in.length ? hints.value_in : a.value_in, stance: hints.stance ?? a.stance,
     theme: a.theme, project: a.project, tags: a.tags, structured: a.structured, raw_text: a.raw_text, language: a.language, error: null,
     embedding: JSON.stringify(await embed(`${a.title}\n${a.summary}\n${a.raw_text}`)),
   });
-  const meta: RawMeta = { ...it.raw_meta, ...(patch.raw_meta as RawMeta), v: 2 };
+  const meta: RawMeta = { ...it.raw_meta, ...(patch.raw_meta as RawMeta), v: FORMAT_VERSION };
   const similar = await nearest(patch.embedding as string, it.id);
   if (similar) meta.similar = similar;
   try {
@@ -200,6 +238,11 @@ async function handle(api: Api, it: Item) {
     const patch: Record<string, unknown> = { ...r.patch, status: r.status };
     if (r.status !== "duplicate") {
       await applyAnalysis(it, a, patch);
+      // Deep format analysis only when the form matters (value_in) or the caption asks for it.
+      if (r.media?.length && (needsFormatAnalysis(patch.value_in as string[]) || parseHints(it.input?.text).deepFormat)) {
+        await stage(api, it, "🎬 разбираю формат…");
+        await addFormatAnalysis(it, r.media, patch).catch((e) => console.warn(`format analysis failed for ${it.id}`, e));
+      }
       await publishItem(api, it, patch, r.publish);
     }
     await updateItem(it.id, patch);

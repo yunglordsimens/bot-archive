@@ -17,31 +17,46 @@ export type Publish = { kind: "upload"; video?: Media; images?: Media[] } | { ki
 const visible = (html: string) => html.replace(/<[^>]+>/g, "").replace(/&(lt|gt|amp);/g, "x").length;
 const cut = (s: string, n: number) => (s.length > n ? `${s.slice(0, Math.max(0, n - 1))}…` : s);
 
+const fmtDate = (iso?: string | null) => (iso ? new Date(iso).toLocaleDateString("ru-RU", { day: "numeric", month: "short", year: "numeric" }) : "");
+const fmtNum = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}K` : String(n));
+
+// "@author (link to profile) · 📅 date of the original · source"
 function authorLine(it: Item) {
   const who = it.author ?? it.origin_detail;
   const handle = who ? (/\s/.test(who) ? who : `@${who.replace(/^@/, "")}`) : "";
-  const src = it.source_url ? `<a href="${it.source_url}">источник</a>` : "";
-  return [esc(handle), src].filter(Boolean).join(" · ");
+  const url = it.raw_meta?.author_url;
+  const author = handle ? (url ? `<a href="${url}">${esc(handle)}</a>` : esc(handle)) : "";
+  const published = fmtDate(it.raw_meta?.published_at ?? it.raw_meta?.stats?.published_at ?? it.occurred_at);
+  const src = it.source_url && it.input_kind !== "profile" ? `<a href="${it.source_url}">источник</a>` : "";
+  return [author, published && `📅 ${published}`, src].filter(Boolean).join(" · ");
 }
 
-// Builds the post and shrinks the long parts until it fits the limit.
+function profileLine(it: Item) {
+  const p = it.raw_meta?.profile;
+  if (it.input_kind !== "profile" || !p) return "";
+  const entity = p.entity === "company" ? "🏢 компания" : p.entity === "person" ? "🙂 человек" : "";
+  return [p.followers != null && `👥 ${fmtNum(p.followers)} подписчиков`, entity].filter(Boolean).join(" · ");
+}
+
+// Post: title · @author · date · directions/themes · summary · «Зачем мне» · EN · original description.
+// No transcript here — it goes as a reply under the post. Long parts shrink until the post fits the limit.
 export function postHtml(it: Item, limit: number): string {
   const t = TYPES[it.content_type ?? "other"] ?? TYPES.other;
   const projects = (it.project ?? []).join(", ");
   const meta = [projects && `🧭 ${esc(projects)}`, it.theme && `🗂 ${esc(it.theme)}`, `${t.emoji} ${t.ru}`].filter(Boolean).join(" · ");
   const en = it.raw_meta?.en;
+  const caption = it.caption?.trim();
   let budget = 1500;
   for (;;) {
-    const parts = [
-      `<b>${esc(cut(it.title ?? "", 200))}</b>`,
-      authorLine(it),
-      meta,
-      "",
+    const head = [`<b>${esc(cut(it.title ?? "", 200))}</b>`, authorLine(it), profileLine(it), meta].filter(Boolean).join("\n");
+    const blocks = [
+      head,
       esc(cut(it.summary ?? "", budget)),
-      it.why_me ? `\n💭 <b>Зачем мне:</b> ${esc(cut(it.why_me, Math.round(budget / 2)))}` : "",
-      en ? `\n🇬🇧 <b>${esc(cut(en.title, 150))}</b> — ${esc(cut(en.summary, Math.round(budget * 0.7)))}` : "",
-    ].filter((p, i) => p !== "" || i === 3);
-    const html = parts.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+      it.why_me && `💭 <b>Зачем мне:</b> ${esc(cut(it.why_me, Math.round(budget / 2)))}`,
+      en && `🇬🇧 <b>${esc(cut(en.title, 150))}</b> — ${esc(cut(en.summary, Math.round(budget * 0.6)))}`,
+      caption && it.input_kind !== "text" && it.input_kind !== "forwarded" && `📝 <i>${esc(cut(caption, Math.round(budget * 0.4)))}</i>`,
+    ].filter(Boolean);
+    const html = blocks.join("\n\n");
     if (visible(html) <= limit || budget < 60) return html;
     budget = Math.round(budget * 0.8);
   }

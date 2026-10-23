@@ -33,6 +33,12 @@ export type Item = {
   theme: string | null;
   project: string[];
   why_me: string | null;
+  visual_description: string | null;
+  value_in: string[];
+  stance: string | null;
+  comments_note: string | null;
+  hook: Hook | null;
+  my_note: string | null;
   next_retry_at?: string | null;
   tags: string[];
   structured: Structured | null;
@@ -51,13 +57,24 @@ export type ItemInput = {
 };
 
 export type NamedList = { title: string; items: string[] };
+// Bump when the card/post format changes: /reprocess picks up items below this version.
+export const FORMAT_VERSION = 3;
+
+export type Hook = {
+  looks_accidental: string; probably_deliberate: string; how_hidden: string; first_seconds: string; visual: string; audio: string;
+  text_on_screen: string; mismatch: string; emotion: string; format: string; edit: string; why_it_works: string; reusable_move: string;
+};
 export type Structured = { points?: string[]; ingredients?: string[]; steps?: string[]; lists?: NamedList[] };
 export type Similar = { id: number; summary: string | null; title: string | null; created_at: string; similarity: number };
 export type RawMeta = {
   via?: string; log?: string[]; archive_error?: string; similar?: Similar; en?: CardText; stats?: Stats;
-  v?: number;                 // 2 = processed with the current format (project, why_me, EN, channel post)
+  v?: number;                 // FORMAT_VERSION the item was processed with
   transcript_link?: string;   // transcript reply under the channel post
   reprocess_log?: string[];
+  comments?: string[];        // top comments given to Gemini
+  author_url?: string;
+  published_at?: string;
+  profile?: { followers?: number; following?: number; posts?: number; likes?: number; bio?: string; entity?: string; platform?: string; verified?: boolean };
 };
 // Card content in one language — used for the English translation.
 export type CardText = { title: string; summary: string; structured: Structured; why_me?: string };

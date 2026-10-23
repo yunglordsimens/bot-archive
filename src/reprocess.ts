@@ -1,10 +1,12 @@
 import type { Api, Bot } from "grammy";
 import type { Part } from "@google/genai";
-import { db, updateItem, type Item, type RawMeta } from "./db.js";
-import { analyze, mediaPart, textPart, urlPart } from "./gemini.js";
-import { fetchMeta, fetchTikTok, fetchVideoGeneric, fetchWebPage, type Fetched } from "./fetchers.js";
+import { db, FORMAT_VERSION, updateItem, type Item, type RawMeta } from "./db.js";
+import { needsFormatAnalysis, parseHints } from "./hints.js";
+import { analyze, textPart, urlPart } from "./gemini.js";
+import { fetchComments, fetchMeta, fetchWebPage } from "./fetchers.js";
 import { postTranscript, rewritePost } from "./channel.js";
-import { applyAnalysis, contextText, tgDownload } from "./worker.js";
+import { applyAnalysis } from "./worker.js";
+import { addFormatAnalysis, contextText, originalMedia } from "./analysis.js";
 import { renderCard } from "./card.js";
 import { esc, plural } from "./format.js";
 
@@ -17,45 +19,28 @@ import { esc, plural } from "./format.js";
 const html = { parse_mode: "HTML" as const, link_preview_options: { is_disabled: true } };
 let running = false;
 
-function mimeOf(it: Item, index: number): string {
-  if (it.input_kind === "tiktok" || it.input_kind === "link") {
-    return /images|gallery/.test(it.raw_meta?.via ?? "") || it.archive_file_ids.length > 1 ? "image/jpeg" : "video/mp4";
-  }
-  return index === 0 && it.input?.mime ? it.input.mime : "application/octet-stream";
-}
-
-// Media from the archive channel (by file_id); if Telegram won't give it (>20 MB), download from the source again.
-async function originalMedia(api: Api, it: Item, log: string[]): Promise<Part[]> {
-  const ids = it.archive_file_ids?.length ? it.archive_file_ids : it.input?.file_id ? [it.input.file_id] : [];
-  try {
-    const parts: Part[] = [];
-    for (const [i, id] of ids.slice(0, 20).entries()) parts.push(await mediaPart(await tgDownload(api, id), mimeOf(it, i)));
-    if (parts.length) return parts;
-  } catch (e) {
-    log.push(`из канала не скачалось: ${(e as Error).message?.slice(0, 80)}`);
-  }
-  if (!it.source_url || !["tiktok", "instagram"].includes(it.origin ?? "")) return [];
-  const f: Fetched = it.origin === "tiktok" ? await fetchTikTok(it.source_url) : await fetchVideoGeneric(it.source_url);
-  const parts: Part[] = [];
-  if (f.video) parts.push(await mediaPart(f.video.buf, f.video.mime));
-  for (const img of f.images ?? []) parts.push(await mediaPart(img.buf, img.mime));
-  log.push(parts.length ? `скачано заново: ${f.via}` : "видео недоступно — разбор по подписи");
-  return parts;
-}
-
 async function reprocessItem(api: Api, it: Item): Promise<{ reposted: boolean; link?: string }> {
   const log: string[] = [];
   const patch: Record<string, unknown> = {};
   const meta: RawMeta = { ...it.raw_meta };
 
-  if (it.source_url && ["tiktok", "instagram", "youtube"].includes(it.origin ?? "")) {
-    const m = await fetchMeta(it.source_url);
+  let comments: string[] = [];
+  const isVideoLink = it.source_url && it.input_kind !== "profile" && ["tiktok", "instagram", "youtube"].includes(it.origin ?? "");
+  if (isVideoLink) {
+    const [m, c] = await Promise.all([fetchMeta(it.source_url!), fetchComments(it.source_url!, it.origin!)]);
+    comments = c;
     if (m?.author) patch.author = it.author = m.author;
     if (m?.caption && !it.caption) patch.caption = it.caption = m.caption;
     if (m?.stats && !meta.stats) meta.stats = m.stats; // counters at save time are not recoverable; better late than never
+    meta.author_url ??= m?.authorUrl ?? (it.origin === "tiktok" && it.author ? `https://www.tiktok.com/@${it.author}` : undefined);
+    meta.published_at ??= meta.stats?.published_at ?? m?.stats?.published_at;
+    if (comments.length) meta.comments = comments;
   }
 
-  const extra: Record<string, string | undefined> = { "Подпись автора": it.caption ?? undefined, "Автор": it.author ?? undefined };
+  const extra: Record<string, string | undefined> = {
+    "Описание под видео (подпись автора)": it.caption ?? undefined, "Автор": it.author ?? undefined,
+    "Топ-комментарии": comments.length ? comments.join("\n") : undefined,
+  };
   let media: Part[] = [];
   if (it.origin === "youtube") media = [urlPart(it.source_url!)];
   else if (it.input_kind === "text" || it.input_kind === "forwarded") extra["Текст"] = it.input?.text ?? it.raw_text ?? "";
@@ -74,6 +59,9 @@ async function reprocessItem(api: Api, it: Item): Promise<{ reposted: boolean; l
   const a = await analyze([textPart(contextText(it, extra)), ...media]);
   patch.raw_meta = { ...meta, reprocess_log: log };
   await applyAnalysis(it, a, patch);
+  if (media.length && (needsFormatAnalysis(patch.value_in as string[]) || parseHints(it.input?.text).deepFormat) && !it.hook) {
+    await addFormatAnalysis(it, media, patch).catch((e) => log.push(`разбор формата не удался: ${(e as Error).message?.slice(0, 80)}`));
+  }
   const full = { ...it, ...patch } as Item;
 
   const post = await rewritePost(api, full);
@@ -129,7 +117,7 @@ export function registerReprocess(bot: Bot) {
     if (/^\d+$/.test(arg)) q = q.eq("id", Number(arg));
     const { data, error } = await q;
     if (error) throw error;
-    const items = ((data ?? []) as Item[]).filter((it) => arg === "all" || /^\d+$/.test(arg) || (it.raw_meta?.v ?? 0) < 2);
+    const items = ((data ?? []) as Item[]).filter((it) => arg === "all" || /^\d+$/.test(arg) || (it.raw_meta?.v ?? 0) < FORMAT_VERSION);
     if (!items.length) return ctx.reply("все записи уже в новом формате. Принудительно: /reprocess all");
     const msg = await ctx.reply(`🔄 перепрохожу ${plural(items.length, "запись", "записи", "записей")}… это займёт пару минут, отчёт пришлю сюда`);
     running = true;

@@ -19,6 +19,7 @@ export type Fetched = {
   date?: string;
   subtitles?: string;
   stats?: Stats;            // public counters at save time (SPEC §5.2)
+  authorUrl?: string;       // profile link of the author
   log: string[];            // what each path did, for /probe and errors
 };
 
@@ -80,6 +81,8 @@ async function readSubs(dir: string): Promise<string | undefined> {
 type YtInfo = {
   description?: string; title?: string; uploader?: string; creator?: string; channel?: string; timestamp?: number; vcodec?: string; duration?: number;
   view_count?: number; like_count?: number; comment_count?: number; repost_count?: number; upload_date?: string; channel_follower_count?: number;
+  uploader_url?: string; channel_url?: string; uploader_id?: string;
+  comments?: { text?: string; like_count?: number; author?: string }[];
 };
 
 export async function ytdlp(url: string, dir: string, opts: { video: boolean }): Promise<{ info: YtInfo; file?: string; subs?: string }> {
@@ -111,7 +114,7 @@ export async function updateYtdlp() {
 
 // ---------- TikTok ----------
 
-async function resolveTikTok(url: string): Promise<{ url: string; id?: string; photo: boolean }> {
+export async function resolveTikTok(url: string): Promise<{ url: string; id?: string; photo: boolean }> {
   let final = url;
   try {
     const res = await fetch(url, { method: "HEAD", redirect: "follow", headers: { "User-Agent": UA } });
@@ -193,6 +196,7 @@ export async function fetchTikTok(inputUrl: string): Promise<Fetched> {
           date: info.timestamp ? new Date(info.timestamp * 1000).toISOString() : undefined });
         out.subtitles = subs;
         out.stats = statsFromYt(info);
+        out.authorUrl = info.uploader_url || info.channel_url;
         if (file && info.vcodec !== "none" && mimeByExt[extOf(file)]?.startsWith("video/")) {
           out.video = { buf: await readFile(file), mime: mimeByExt[extOf(file)] };
           out.via = "yt-dlp";
@@ -278,6 +282,7 @@ export async function fetchVideoGeneric(url: string): Promise<Fetched> {
       out.author = info.uploader || info.channel;
       out.subtitles = subs;
       out.stats = statsFromYt(info);
+      out.authorUrl = info.uploader_url || info.channel_url;
       if (file && mimeByExt[extOf(file)]) {
         out.video = { buf: await readFile(file), mime: mimeByExt[extOf(file)] };
         out.via = "yt-dlp";
@@ -289,17 +294,91 @@ export async function fetchVideoGeneric(url: string): Promise<Fetched> {
   });
 }
 
+// Top comments (SPEC §5.3a): 20–30 by likes. TikTok via TikWM first (yt-dlp pulls every comment there — slow),
+// then yt-dlp with a hard timeout. Nothing → [] (the item is saved anyway).
+export async function fetchComments(url: string, origin: string): Promise<string[]> {
+  const top = (list: { text?: string; likes?: number }[]) => list
+    .filter((c) => c.text?.trim())
+    .sort((a, b) => (b.likes ?? 0) - (a.likes ?? 0))
+    .slice(0, 25)
+    .map((c) => `${c.likes ? `♥${c.likes} ` : ""}${c.text!.replace(/\s+/g, " ").slice(0, 300)}`);
+  if (origin === "tiktok") {
+    try {
+      const res = await fetch(`https://www.tikwm.com/api/comment/list/?url=${encodeURIComponent(url)}&count=30&cursor=0`, { headers: { "User-Agent": UA }, signal: AbortSignal.timeout(15000) });
+      const j: any = await res.json();
+      const list = (j?.data?.comments ?? []).map((c: any) => ({ text: c.text, likes: c.digg_count }));
+      if (list.length) return top(list);
+    } catch {}
+  }
+  try {
+    const { stdout } = await run("yt-dlp", ["--no-warnings", "--no-playlist", "-j", "--skip-download", "--write-comments",
+      "--extractor-args", "youtube:max_comments=60,all,60,0;comment_sort=top", url], { timeout: 45_000, maxBuffer: 100 * 1024 * 1024 });
+    const info = JSON.parse(stdout.trim().split("\n").pop()!) as YtInfo;
+    return top((info.comments ?? []).map((c) => ({ text: c.text, likes: c.like_count })));
+  } catch (e) {
+    console.warn("comments skipped:", errMsg(e));
+    return [];
+  }
+}
+
+// Profile pages (SPEC §5.3a): whatever is public — name, bio, followers, recent post titles.
+export type ProfileInfo = {
+  platform: string; url: string; handle?: string; name?: string; bio?: string;
+  followers?: number; following?: number; posts?: number; likes?: number; verified?: boolean; recent?: string[]; raw?: string;
+};
+
+export function profileHandle(url: string): { platform: string; handle: string } | undefined {
+  const u = new URL(url);
+  const host = u.hostname.replace(/^(www|m)\./, "");
+  const seg = u.pathname.split("/").filter(Boolean);
+  if (/tiktok\.com$/.test(host) && seg.length === 1 && seg[0].startsWith("@")) return { platform: "tiktok", handle: seg[0].slice(1) };
+  if (/instagram\.com$/.test(host) && seg.length === 1 && !["p", "reel", "reels", "tv", "stories", "explore", "accounts"].includes(seg[0])) return { platform: "instagram", handle: seg[0] };
+  if (/youtube\.com$/.test(host) && (seg[0]?.startsWith("@") || ["channel", "c", "user"].includes(seg[0])) && seg.length <= 2 && !["videos", "shorts"].includes(seg[1] ?? ""))
+    return { platform: "youtube", handle: seg[0].startsWith("@") ? seg[0].slice(1) : seg[1] ?? seg[0] };
+}
+
+export async function fetchProfile(url: string): Promise<ProfileInfo> {
+  const p = profileHandle(url);
+  const out: ProfileInfo = { platform: p?.platform ?? new URL(url).hostname, url, handle: p?.handle };
+  if (p?.platform === "tiktok") {
+    try {
+      const j: any = await (await fetch(`https://www.tikwm.com/api/user/info?unique_id=${encodeURIComponent(p.handle)}`, { headers: { "User-Agent": UA } })).json();
+      const u = j?.data?.user, s = j?.data?.stats;
+      if (u) Object.assign(out, { name: u.nickname, bio: u.signature, verified: u.verified, followers: s?.followerCount, following: s?.followingCount, likes: s?.heartCount, posts: s?.videoCount });
+    } catch {}
+  }
+  if (p?.platform === "youtube") {
+    try {
+      const { stdout } = await run("yt-dlp", ["--no-warnings", "-J", "--flat-playlist", "--playlist-items", "1:10", url], { timeout: 60_000, maxBuffer: 50 * 1024 * 1024 });
+      const j = JSON.parse(stdout);
+      Object.assign(out, { name: j.channel ?? j.uploader ?? j.title, bio: j.description, followers: j.channel_follower_count,
+        recent: (j.entries ?? []).map((e: any) => e.title).filter(Boolean) });
+    } catch {}
+  }
+  if (!out.name) {
+    // Instagram / websites / fallback: Open Graph tags (Instagram puts "N Followers, N Following, N Posts" there).
+    try {
+      const html = await (await fetch(url, { headers: { "User-Agent": UA, "Accept-Language": "en" }, signal: AbortSignal.timeout(15000) })).text();
+      const { document } = parseHTML(html);
+      const og = (k: string) => document.querySelector(`meta[property="${k}"]`)?.getAttribute("content") ?? undefined;
+      out.name = og("og:title") ?? document.title;
+      out.raw = [og("og:description"), document.querySelector('meta[name="description"]')?.getAttribute("content")].filter(Boolean).join("\n");
+    } catch {}
+  }
+  return out;
+}
+
 // Metadata only (no download, no subs) — for counters of links that skip yt-dlp otherwise (YouTube goes to Gemini directly).
 export async function fetchStats(url: string): Promise<Stats | undefined> {
   return (await fetchMeta(url))?.stats;
 }
 
 // Author, caption and counters without downloading the video; TikTok falls back to oEmbed for the author.
-export async function fetchMeta(url: string): Promise<{ author?: string; caption?: string; stats?: Stats } | undefined> {
+export async function fetchMeta(url: string): Promise<{ author?: string; caption?: string; stats?: Stats; authorUrl?: string } | undefined> {
   try {
     const { stdout } = await run("yt-dlp", ["--no-warnings", "--no-playlist", "-j", "--skip-download", url], { timeout: 60_000, maxBuffer: 50 * 1024 * 1024 });
     const info = JSON.parse(stdout.trim().split("\n").pop()!) as YtInfo;
-    return { author: info.uploader || info.creator || info.channel, caption: info.description || info.title, stats: statsFromYt(info) };
+    return { author: info.uploader || info.creator || info.channel, caption: info.description || info.title, stats: statsFromYt(info), authorUrl: info.uploader_url || info.channel_url };
   } catch (e) {
     console.warn("metadata failed", errMsg(e));
   }

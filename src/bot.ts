@@ -2,8 +2,9 @@ import { Bot, type Context } from "grammy";
 import type { Message, MessageEntity } from "grammy/types";
 import { config, TG_FILE_LIMIT } from "./config.js";
 import { db, findByTextHash, getSetting, insertItem, setSetting, type Item } from "./db.js";
-import { acceptedText, duplicateText, esc, plural } from "./format.js";
-import { fetchTikTok } from "./fetchers.js";
+import { acceptedText, duplicateText, plural } from "./format.js";
+import { fetchTikTok, profileHandle } from "./fetchers.js";
+import { parseHints } from "./hints.js";
 import { registerUi } from "./ui.js";
 import { registerCard } from "./card.js";
 import { registerReprocess } from "./reprocess.js";
@@ -11,8 +12,12 @@ import { textHash, urlHash } from "./dedup.js";
 
 const html = { parse_mode: "HTML" as const, link_preview_options: { is_disabled: true } };
 
-function classifyUrl(url: string): { input_kind: string; origin: string } {
+function classifyUrl(url: string, caption?: string): { input_kind: string; origin: string } {
   const host = new URL(url).hostname.replace(/^www\./, "");
+  // Profiles: tiktok.com/@x, instagram.com/x, youtube.com/@x — or any link with «профиль» in the message.
+  const profile = profileHandle(url);
+  if (profile) return { input_kind: "profile", origin: profile.platform };
+  if (parseHints(caption).profile) return { input_kind: "profile", origin: "other" };
   if (/(^|\.)tiktok\.com$/.test(host)) return { input_kind: "tiktok", origin: "tiktok" };
   if (/(^|\.)(youtube\.com|youtu\.be)$/.test(host)) return { input_kind: "link", origin: "youtube" };
   if (/(^|\.)instagram\.com$/.test(host)) return { input_kind: "link", origin: "instagram" };
@@ -165,7 +170,9 @@ export function createBot() {
         return;
       }
       if ((file.file_size ?? 0) > TG_FILE_LIMIT) return ctx.reply("слишком большой (>20 МБ) — не обработать", { reply_parameters: { message_id: m.message_id } });
-      return accept(ctx, { ...baseRow(m), input_kind: file.input_kind, tg_file_id: file.file_id, input: { file_id: file.file_id, mime: file.mime, file_size: file.file_size, text: m.caption } });
+      // A screenshot of a profile grid with «профиль» in the caption is analysed as a profile.
+      const kind = file.input_kind === "screenshot" && parseHints(m.caption).profile ? "profile" : file.input_kind;
+      return accept(ctx, { ...baseRow(m), input_kind: kind, tg_file_id: file.file_id, input: { file_id: file.file_id, mime: file.mime, file_size: file.file_size, text: m.caption } });
     }
 
     const text = m.text ?? m.caption;
@@ -195,10 +202,10 @@ export function createBot() {
       const hash = await urlHash(url);
       const dup = await findByTextHash(hash);
       if (dup) {
-        await dupReply(dup, { ...classifyUrl(url), source_url: url, text_hash: hash, input: { text } });
+        await dupReply(dup, { ...classifyUrl(url, text), source_url: url, text_hash: hash, input: { text } });
         continue;
       }
-      await accept(ctx, { ...baseRow(m), ...classifyUrl(url), source_url: url, text_hash: hash, input: { text } });
+      await accept(ctx, { ...baseRow(m), ...classifyUrl(url, text), source_url: url, text_hash: hash, input: { text } });
     }
   });
 

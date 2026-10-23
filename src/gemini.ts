@@ -1,6 +1,7 @@
 import { GoogleGenAI, Type, type Part } from "@google/genai";
 import { config, PROJECTS, THEMES, TYPES } from "./config.js";
-import type { CardText, Structured } from "./db.js";
+import type { CardText, Hook, Structured } from "./db.js";
+import { STANCES, VALUE_IN } from "./hints.js";
 
 const ai = new GoogleGenAI({ apiKey: config.geminiKey });
 
@@ -15,6 +16,11 @@ export type Analysis = {
   tags: string[];
   structured: Structured;
   raw_text: string;
+  visual_description: string;
+  value_in: string[];
+  stance: string;
+  comments_note: string;
+  entity: string;
   language: string[];
 };
 
@@ -49,10 +55,15 @@ const schema = {
         },
       },
     },
-    raw_text: { type: Type.STRING, description: "Дословно: что говорят и что написано на экране/картинке, на языке оригинала" },
+    raw_text: { type: Type.STRING, description: "Транскрипт: дословно, что говорят (+ текст на экране), на языке оригинала. Без пересказа и без описания картинки" },
+    visual_description: { type: Type.STRING, description: "Что в кадре: кто, где, действия, монтаж. Коротко; подробно — если речи мало или ценность в картинке" },
+    value_in: { type: Type.ARRAY, items: { type: Type.STRING, enum: [...VALUE_IN] }, description: "Где ценность: info / visual / audio / format / meta; можно несколько" },
+    stance: { type: Type.STRING, enum: [...STANCES], description: "Догадка об отношении пользователя" },
+    comments_note: { type: Type.STRING, description: "Полезное из комментариев (уточнения, ссылки, ответы автора, спор) одной строкой; пусто, если ничего" },
+    entity: { type: Type.STRING, enum: ["person", "company", "none"], description: "Для профилей: человек или компания; иначе none" },
     language: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Языки в контенте, ISO-коды: ru, uk, cs, en…" },
   },
-  required: ["title", "summary", "content_type", "kind", "theme", "project", "why_me", "tags", "structured", "raw_text", "language"],
+  required: ["title", "summary", "content_type", "kind", "theme", "project", "why_me", "tags", "structured", "raw_text", "visual_description", "value_in", "stance", "comments_note", "entity", "language"],
 };
 
 const SYSTEM = `Ты разбираешь сохранённый контент для личного архива. Вход может быть видео (со звуком), картинкой, аудио, текстом или страницей.
@@ -69,6 +80,11 @@ const SYSTEM = `Ты разбираешь сохранённый контент 
   · project — К КАКОМУ НАПРАВЛЕНИЮ ЖИЗНИ пользователя относится: можно несколько (обычно 1–2), строго из списка; если ни к одному — «разное».
   Направления пользователя:
 ${Object.entries(PROJECTS).map(([k, v]) => `  · ${k}${v ? ` — ${v}` : ""}`).join("\n")}
+- Три разных текста, не смешивай: raw_text — транскрипт (что говорят + надписи в кадре; описание под видео и комментарии туда НЕ включай), summary — суть своими словами, visual_description — что видно в кадре.
+- value_in — где ценность: info (информация), visual (картинка), audio (звук, трек, голос), format (как сделано, приём), meta (зацепило на мета-уровне). Можно несколько.
+- stance — отношение пользователя: like, dislike, anti_example (как не надо), replicate (хочу повторить), format_idea (идея для формата), seen_before (уже видела такое); для профилей ещё example, interesting. Если пользователь дал подсказку — бери её, она главнее твоей догадки.
+- comments_note — только если в комментариях есть что-то полезное (уточнение, ссылка, рецепт целиком, ответ автора, спор по сути); иначе пустая строка.
+- Профиль (аккаунт человека или компании): summary — кто это, о чём и в каком формате контент, визуальный стиль; why_me — чем это пример или антипример для пользователя; entity — person / company.
 - why_me — «зачем мне»: как это пригодится пользователю в его направлениях, 1–2 предложения, конкретно (что сделать, где применить). Если это просто для настроения — так и скажи.
 - Ничего не выдумывай: если данных мало (например, только подпись), так и скажи в summary.`;
 
@@ -133,6 +149,11 @@ function validate(raw: string): Analysis {
   a.structured ??= {};
   a.raw_text ??= "";
   a.why_me ??= "";
+  a.visual_description ??= "";
+  a.value_in = [...new Set((a.value_in ?? []).filter((v) => (VALUE_IN as readonly string[]).includes(v)))];
+  if (!(STANCES as readonly string[]).includes(a.stance)) a.stance = "like";
+  a.comments_note = (a.comments_note ?? "").trim();
+  a.entity ??= "none";
   a.language ??= [];
   return a;
 }
@@ -170,6 +191,36 @@ export async function translateCard(card: CardText): Promise<CardText> {
   const system = "Translate this archive card into natural English. Keep the same JSON structure and the same number of items. " +
     "For films, books, places and products use their official English names when they exist.";
   return JSON.parse(await generate([textPart(JSON.stringify(card))], system, cardSchema)) as CardText;
+}
+
+// Deep format analysis (SPEC §3.9) — only when value_in says the form matters, on a caption hint, or by button.
+const hookFields: Record<keyof Hook, string> = {
+  looks_accidental: "что в ролике выглядит случайным, естественным, «просто так получилось»",
+  probably_deliberate: "какое решение, вероятно, за этим стоит и зачем (гипотеза)",
+  how_hidden: "чем замаскирована продуманность: небрежная съёмка, «живой» тон, оговорки, бытовой фон…",
+  first_seconds: "что происходит в первые 1–3 сек: кадр, первая фраза, первый звук",
+  visual: "кто в кадре, внешность, одежда, место, предметы, композиция, свет",
+  audio: "голос (интонация, темп, акцент), музыка/трек, звуковые эффекты, тишина",
+  text_on_screen: "надписи, субтитры, их стиль",
+  mismatch: "что с чем НЕ вяжется (образ vs тема, звук vs картинка, ожидание vs реальность)",
+  emotion: "какая реакция задумана: удивление, смех, раздражение, «чё?», зависть…",
+  format: "тип ролика: монолог в камеру, POV, скетч, до/после, ответ на коммент…",
+  edit: "монтаж: темп склеек, зумы, перебивки, длина",
+  why_it_works: "1–2 предложения: почему это останавливает скролл",
+  reusable_move: "скрытое решение в общем виде, без привязки к этому видео: как сделать так же, чтобы тоже выглядело случайным",
+};
+const hookSchema = {
+  type: Type.OBJECT,
+  properties: Object.fromEntries(Object.entries(hookFields).map(([k, d]) => [k, { type: Type.STRING, description: d }])),
+  required: Object.keys(hookFields),
+};
+const HOOK_SYSTEM = `Разбери, как сделано это видео (или пост). Главное — решения, которые выглядят случайными или естественными, но, скорее всего, продуманы: странный кастинг, «неудачный» свет, оговорка, будто бы случайный предмет в кадре, снято «как на телефон».
+Цепочка: что кажется случайностью → какое решение за этим, вероятно, стоит → как это решение спрятано.
+Первые 1–3 секунды разбери отдельно. Это гипотезы — формулируй «скорее всего», «похоже на», не как факты.
+Запрещены общие места вроде «яркий визуал привлекает внимание», «эмоциональный контент вовлекает» — только конкретные детали этого ролика. Пиши по-русски.`;
+
+export async function analyzeFormat(parts: Part[]): Promise<Hook> {
+  return JSON.parse(await generate(parts, HOOK_SYSTEM, hookSchema)) as Hook;
 }
 
 export async function embed(text: string): Promise<number[]> {

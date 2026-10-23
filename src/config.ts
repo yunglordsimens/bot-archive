@@ -62,6 +62,15 @@ export const TYPES: Record<string, { ru: string; emoji: string }> = {
   other: { ru: "другое", emoji: "📌" },
 };
 
+// SPEC §5.3a: how the owner relates to an item, and where its value is.
+export const STANCE_LABEL: Record<string, string> = {
+  like: "❤️ нравится", dislike: "👎 не нравится", anti_example: "🚫 антипример", replicate: "🎯 хочу повторить",
+  format_idea: "🧪 идея формата", seen_before: "👀 уже видела", example: "🔖 пример", interesting: "🤔 интересно",
+};
+export const VALUE_LABEL: Record<string, string> = {
+  info: "📚 инфа", visual: "🖼 картинка", audio: "🎧 звук", format: "🎬 формат", meta: "🧠 мета",
+};
+
 export const SOURCE_LABEL: Record<string, string> = {
   tiktok: "🎵 тикток",
   youtube: "▶️ youtube",
@@ -75,6 +84,7 @@ export const SOURCE_LABEL: Record<string, string> = {
   video: "🎬 видео",
   video_note: "⭕️ кружочек",
   document: "📄 файл",
+  profile: "👤 профиль",
 };
 
 export const TG_FILE_LIMIT = 20 * 1024 * 1024;
