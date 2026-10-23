@@ -1,27 +1,28 @@
 import { InputFile, type Api } from "grammy";
 import { config } from "./config.js";
-import { getSetting } from "./db.js";
+import { tr } from "./i18n/index.js";
+import type { User } from "./users.js";
 import type { Media } from "./fetchers.js";
 
 const BOT_UPLOAD_LIMIT = 50 * 1024 * 1024;
 
-// Channel the bot detected itself (made admin) wins over ARCHIVE_CHANNEL_ID from .env.
-export async function archiveChannel(): Promise<number | undefined> {
-  const v = await getSetting("archive_channel_id");
-  return v ? Number(v) : config.archiveChannelId;
+// The user's own archive channel (set when they make the bot admin there). The owner may also set ARCHIVE_CHANNEL_ID.
+export function archiveChannel(u: User): number | undefined {
+  return u.archive_channel_id ?? (u.telegram_user_id === config.ownerId ? config.archiveChannelId : undefined);
 }
 
 // Is the archive channel usable? Used at startup and in the status screen.
-export async function archiveState(api: Api, botId: number): Promise<{ ok: boolean; title?: string; problem?: string }> {
-  const ch = await archiveChannel();
-  if (!ch) return { ok: false, problem: "не подключён: добавь бота админом в приватный канал" };
+export async function archiveState(api: Api, botId: number, u: User): Promise<{ ok: boolean; title?: string; problem?: string }> {
+  const d = tr(u.lang);
+  const ch = archiveChannel(u);
+  if (!ch) return { ok: false, problem: d.channel.notConnected };
   try {
     const me = await api.getChatMember(ch, botId);
-    if (me.status !== "administrator" || !me.can_post_messages) return { ok: false, problem: "— бот там не админ или не может публиковать" };
+    if (me.status !== "administrator" || !me.can_post_messages) return { ok: false, problem: d.channel.notAdmin };
     const chat = await api.getChat(ch);
     return { ok: true, title: "title" in chat ? chat.title : String(ch) };
   } catch {
-    return { ok: false, problem: "недоступен — удали бота из админов канала и добавь заново" };
+    return { ok: false, problem: d.channel.unavailable };
   }
 }
 
@@ -32,12 +33,10 @@ export function link(channelId: number, messageId: number) {
 // Downloaded media (TikTok etc.) — upload to the channel, return file_ids + link.
 export async function archiveUpload(
   api: Api,
+  ch: number,
   media: { video?: Media; images?: Media[] },
   caption: string,
 ): Promise<{ fileIds: string[]; link?: string }> {
-  const ch = await archiveChannel();
-  if (!ch) return { fileIds: [] };
-
   if (media.video && media.video.buf.length < BOT_UPLOAD_LIMIT) {
     const m = await api.sendVideo(ch, new InputFile(media.video.buf, "video.mp4"), { caption, parse_mode: "HTML", supports_streaming: true });
     return { fileIds: [m.video.file_id], link: link(ch, m.message_id) };

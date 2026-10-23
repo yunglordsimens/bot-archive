@@ -1,5 +1,5 @@
 import { GoogleGenAI, Type, type Part } from "@google/genai";
-import { config, PROJECTS, THEMES, TYPES } from "./config.js";
+import { config } from "./config.js";
 import type { CardText, Hook, Structured } from "./db.js";
 import { STANCES, VALUE_IN } from "./hints.js";
 
@@ -24,69 +24,76 @@ export type Analysis = {
   language: string[];
 };
 
-const schema = {
-  type: Type.OBJECT,
-  properties: {
-    title: { type: Type.STRING, description: "Короткий заголовок, 3–8 слов, по-русски" },
-    summary: { type: Type.STRING, description: "Суть в 3–5 строк, по-русски" },
-    content_type: { type: Type.STRING, enum: Object.keys(TYPES) },
-    kind: { type: Type.STRING, description: "Что это по форме: видео, мем, твит, заметка, чек, скрин переписки, статья, голосовое…" },
-    theme: { type: Type.STRING, enum: THEMES },
-    why_me: { type: Type.STRING, description: "Зачем это мне: 1–2 предложения, как пригодится в моих направлениях. Конкретно, без общих слов" },
-    project: { type: Type.ARRAY, items: { type: Type.STRING, enum: Object.keys(PROJECTS) }, description: "Направления жизни, к которым относится запись; 1–3" },
-    tags: { type: Type.ARRAY, items: { type: Type.STRING }, description: "3–7 свободных тегов, строчными, по-русски" },
-    structured: {
-      type: Type.OBJECT,
-      properties: {
-        points: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Пункты совета/идеи" },
-        ingredients: { type: Type.ARRAY, items: { type: Type.STRING } },
-        steps: { type: Type.ARRAY, items: { type: Type.STRING } },
-        lists: {
-          type: Type.ARRAY,
-          description: "Перечни из контента: фильмы, книги, места, инструменты, продукты, приложения, шрифты…",
-          items: {
-            type: Type.OBJECT,
-            properties: {
-              title: { type: Type.STRING, description: "Название списка по-русски: «Фильмы», «Места в Праге»…" },
-              items: { type: Type.ARRAY, items: { type: Type.STRING } },
+// Who the analysis is for: output language and the user's own lists (SPEC §5.4).
+export type Profile = { lang: string; language: string; themes: string[]; projects: Record<string, string> };
+
+function schemaFor(p: Profile) {
+  return {
+    type: Type.OBJECT,
+    properties: {
+      title: { type: Type.STRING, description: `Short title, 3–8 words, in ${p.language}` },
+      summary: { type: Type.STRING, description: `The gist in 3–5 lines, in ${p.language}` },
+      content_type: { type: Type.STRING, enum: ["tip", "recipe", "idea", "funny", "reference", "other"] },
+      kind: { type: Type.STRING, description: `What it is by form: video, meme, tweet, note, receipt, chat screenshot, article, voice message… (in ${p.language})` },
+      theme: { type: Type.STRING, enum: p.themes },
+      why_me: { type: Type.STRING, description: `Why it matters to the user: 1–2 sentences, how it helps in their life areas. Concrete. In ${p.language}` },
+      project: { type: Type.ARRAY, items: { type: Type.STRING, enum: Object.keys(p.projects) }, description: "User's life areas this belongs to; 1–3" },
+      tags: { type: Type.ARRAY, items: { type: Type.STRING }, description: `3–7 free tags, lowercase, in ${p.language}` },
+      structured: {
+        type: Type.OBJECT,
+        properties: {
+          points: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Points of a tip/idea" },
+          ingredients: { type: Type.ARRAY, items: { type: Type.STRING } },
+          steps: { type: Type.ARRAY, items: { type: Type.STRING } },
+          lists: {
+            type: Type.ARRAY,
+            description: "Enumerations in the content: films, books, places, tools, products, apps, fonts…",
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                title: { type: Type.STRING, description: `List name in ${p.language}: “Films”, “Places in Prague”…` },
+                items: { type: Type.ARRAY, items: { type: Type.STRING } },
+              },
+              required: ["title", "items"],
             },
-            required: ["title", "items"],
           },
         },
       },
+      raw_text: { type: Type.STRING, description: "Transcript: verbatim what is said (+ on-screen text), in the original language. No retelling, no picture description" },
+      visual_description: { type: Type.STRING, description: `What is in the frame: who, where, actions, editing. Short; detailed if there is little speech or the value is visual. In ${p.language}` },
+      value_in: { type: Type.ARRAY, items: { type: Type.STRING, enum: [...VALUE_IN] }, description: "Where the value is: info / visual / audio / format / meta; several allowed" },
+      stance: { type: Type.STRING, enum: [...STANCES], description: "Guess of the user's attitude" },
+      comments_note: { type: Type.STRING, description: `Useful bits from the comments (clarifications, links, author replies, debate) in one line, in ${p.language}; empty if nothing` },
+      entity: { type: Type.STRING, enum: ["person", "company", "none"], description: "For profiles: person or company; otherwise none" },
+      language: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Languages in the content, ISO codes: ru, uk, cs, en…" },
     },
-    raw_text: { type: Type.STRING, description: "Транскрипт: дословно, что говорят (+ текст на экране), на языке оригинала. Без пересказа и без описания картинки" },
-    visual_description: { type: Type.STRING, description: "Что в кадре: кто, где, действия, монтаж. Коротко; подробно — если речи мало или ценность в картинке" },
-    value_in: { type: Type.ARRAY, items: { type: Type.STRING, enum: [...VALUE_IN] }, description: "Где ценность: info / visual / audio / format / meta; можно несколько" },
-    stance: { type: Type.STRING, enum: [...STANCES], description: "Догадка об отношении пользователя" },
-    comments_note: { type: Type.STRING, description: "Полезное из комментариев (уточнения, ссылки, ответы автора, спор) одной строкой; пусто, если ничего" },
-    entity: { type: Type.STRING, enum: ["person", "company", "none"], description: "Для профилей: человек или компания; иначе none" },
-    language: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Языки в контенте, ISO-коды: ru, uk, cs, en…" },
-  },
-  required: ["title", "summary", "content_type", "kind", "theme", "project", "why_me", "tags", "structured", "raw_text", "visual_description", "value_in", "stance", "comments_note", "entity", "language"],
-};
+    required: ["title", "summary", "content_type", "kind", "theme", "project", "why_me", "tags", "structured", "raw_text", "visual_description", "value_in", "stance", "comments_note", "entity", "language"],
+  };
+}
 
-const SYSTEM = `Ты разбираешь сохранённый контент для личного архива. Вход может быть видео (со звуком), картинкой, аудио, текстом или страницей.
-Языки речи и текста: русский, украинский, чешский, английский вперемешку.
-- Суть бери и из речи, и из текста на экране. Если звук — только музыка, бери суть из картинки и надписей.
-- summary, title, tags — по-русски. raw_text — на языке оригинала.
-- content_type: tip (совет), recipe (рецепт), idea (идея), funny (смешное), reference (визуальный референс), other.
-- Для советов заполни structured.points.
-- Рецепт собирай из всего вместе: речь, текст на экране и описание под видео (подпись автора). structured.ingredients — с количествами, structured.steps — по порядку.
-- Если в контенте что-то перечисляется (фильмы, книги, места, инструменты, продукты, приложения, шрифты…) — вынеси каждый перечень в structured.lists: { title: название списка, items: элементы }. Названия — как в оригинале, при необходимости с короткой пометкой.
-- Три разных поля, не смешивай их:
-  · content_type — ЧТО это по форме (совет, рецепт, идея…);
-  · theme — О ЧЁМ это (одна тема строго из списка);
-  · project — К КАКОМУ НАПРАВЛЕНИЮ ЖИЗНИ пользователя относится: можно несколько (обычно 1–2), строго из списка; если ни к одному — «разное».
-  Направления пользователя:
-${Object.entries(PROJECTS).map(([k, v]) => `  · ${k}${v ? ` — ${v}` : ""}`).join("\n")}
-- Три разных текста, не смешивай: raw_text — транскрипт (что говорят + надписи в кадре; описание под видео и комментарии туда НЕ включай), summary — суть своими словами, visual_description — что видно в кадре.
-- value_in — где ценность: info (информация), visual (картинка), audio (звук, трек, голос), format (как сделано, приём), meta (зацепило на мета-уровне). Можно несколько.
-- stance — отношение пользователя: like, dislike, anti_example (как не надо), replicate (хочу повторить), format_idea (идея для формата), seen_before (уже видела такое); для профилей ещё example, interesting. Если пользователь дал подсказку — бери её, она главнее твоей догадки.
-- comments_note — только если в комментариях есть что-то полезное (уточнение, ссылка, рецепт целиком, ответ автора, спор по сути); иначе пустая строка.
-- Профиль (аккаунт человека или компании): summary — кто это, о чём и в каком формате контент, визуальный стиль; why_me — чем это пример или антипример для пользователя; entity — person / company.
-- why_me — «зачем мне»: как это пригодится пользователю в его направлениях, 1–2 предложения, конкретно (что сделать, где применить). Если это просто для настроения — так и скажи.
-- Ничего не выдумывай: если данных мало (например, только подпись), так и скажи в summary.`;
+function systemFor(p: Profile) {
+  return `You analyse saved content for a personal archive. Input can be a video (with sound), an image, audio, text or a web page.
+Speech and text may mix Russian, Ukrainian, Czech, English, Vietnamese and other languages.
+- Write title, summary, why_me, kind, tags, visual_description, comments_note and list titles in ${p.language}. raw_text stays in the original language.
+- Take the gist from both speech and on-screen text. If the sound is only music, take it from the picture and captions.
+- content_type: tip, recipe, idea, funny, reference (visual reference), other.
+- For tips fill structured.points.
+- Build a recipe from everything together: speech, on-screen text and the description under the video. structured.ingredients with amounts, structured.steps in order.
+- If the content enumerates things (films, books, places, tools, products, apps, fonts…), put each enumeration into structured.lists: { title, items }. Names as in the original, with a short note if needed.
+- Three different fields, don't mix them:
+  · content_type — WHAT it is by form;
+  · theme — what it is ABOUT (exactly one from the list);
+  · project — which of the user's LIFE AREAS it belongs to: one or more (usually 1–2), strictly from the list; if none fits — the last one.
+  The user's life areas:
+${Object.entries(p.projects).map(([k, v]) => `  · ${k}${v ? ` — ${v}` : ""}`).join("\n")}
+- Three different texts, don't mix: raw_text — transcript (speech + on-screen text; NOT the description under the video, NOT comments), summary — the gist in your words, visual_description — what is seen in the frame.
+- value_in — where the value is: info, visual (picture), audio (sound, track, voice), format (how it's made, a trick), meta (hooked on a meta level). Several allowed.
+- stance — the user's attitude: like, dislike, anti_example, replicate (want to repeat it), format_idea, seen_before; for profiles also example, interesting. If the user gave a hint — use it, it beats your guess.
+- comments_note — only if the comments contain something useful (clarification, link, full recipe, author's reply, a real debate); otherwise an empty string.
+- Profile (an account of a person or company): summary — who it is, what and in which format they post, visual style; why_me — how it is an example or anti-example for the user; entity — person / company.
+- why_me — how it helps the user in their life areas, 1–2 sentences, concrete (what to do, where to apply). If it's just for mood — say so.
+- Don't invent anything: if there is little data (e.g. only a caption), say so in the summary.`;
+}
 
 export function textPart(text: string): Part {
   return { text };
@@ -111,7 +118,7 @@ export function urlPart(url: string, mimeType = "video/*"): Part {
 }
 
 // Single entry point for the model — swap the model here.
-async function generate(parts: Part[], system = SYSTEM, responseSchema: object = schema): Promise<string> {
+async function generate(parts: Part[], system: string, responseSchema: object): Promise<string> {
   const models = [config.geminiModel, ...config.geminiFallbackModels];
   let lastErr: unknown;
   for (const model of models) {
@@ -138,13 +145,13 @@ async function generate(parts: Part[], system = SYSTEM, responseSchema: object =
   throw lastErr;
 }
 
-function validate(raw: string): Analysis {
+function validate(raw: string, p: Profile): Analysis {
   const a = JSON.parse(raw) as Analysis;
   if (!a.summary || !a.title) throw new Error("empty summary/title");
-  if (!TYPES[a.content_type]) a.content_type = "other";
-  if (!THEMES.includes(a.theme)) a.theme = "разное";
-  a.project = [...new Set((a.project ?? []).filter((p) => p in PROJECTS))];
-  if (!a.project.length) a.project = ["разное"];
+  if (!["tip", "recipe", "idea", "funny", "reference", "other"].includes(a.content_type)) a.content_type = "other";
+  if (!p.themes.includes(a.theme)) a.theme = p.themes.at(-1)!;
+  a.project = [...new Set((a.project ?? []).filter((x) => x in p.projects))];
+  if (!a.project.length) a.project = [Object.keys(p.projects).at(-1)!];
   a.tags = (a.tags ?? []).map((t) => t.toLowerCase().trim()).filter(Boolean);
   a.structured ??= {};
   a.raw_text ??= "";
@@ -158,13 +165,14 @@ function validate(raw: string): Analysis {
   return a;
 }
 
-// Analyse content; one retry on invalid JSON.
-export async function analyze(parts: Part[]): Promise<Analysis> {
+// Analyse content for a user; one retry on invalid JSON.
+export async function analyze(parts: Part[], p: Profile): Promise<Analysis> {
+  const run = async () => validate(await generate(parts, systemFor(p), schemaFor(p)), p);
   try {
-    return validate(await generate(parts));
+    return await run();
   } catch (e) {
     if (!(e instanceof SyntaxError) && !(e instanceof Error && e.message.startsWith("empty"))) throw e;
-    return validate(await generate(parts));
+    return run();
   }
 }
 
@@ -217,10 +225,10 @@ const hookSchema = {
 const HOOK_SYSTEM = `Разбери, как сделано это видео (или пост). Главное — решения, которые выглядят случайными или естественными, но, скорее всего, продуманы: странный кастинг, «неудачный» свет, оговорка, будто бы случайный предмет в кадре, снято «как на телефон».
 Цепочка: что кажется случайностью → какое решение за этим, вероятно, стоит → как это решение спрятано.
 Первые 1–3 секунды разбери отдельно. Это гипотезы — формулируй «скорее всего», «похоже на», не как факты.
-Запрещены общие места вроде «яркий визуал привлекает внимание», «эмоциональный контент вовлекает» — только конкретные детали этого ролика. Пиши по-русски.`;
+Запрещены общие места вроде «яркий визуал привлекает внимание», «эмоциональный контент вовлекает» — только конкретные детали этого ролика.`;
 
-export async function analyzeFormat(parts: Part[]): Promise<Hook> {
-  return JSON.parse(await generate(parts, HOOK_SYSTEM, hookSchema)) as Hook;
+export async function analyzeFormat(parts: Part[], language: string): Promise<Hook> {
+  return JSON.parse(await generate(parts, `${HOOK_SYSTEM}\nWrite every field in ${language}.`, hookSchema)) as Hook;
 }
 
 export async function embed(text: string): Promise<number[]> {

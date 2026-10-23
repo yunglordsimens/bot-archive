@@ -1,8 +1,10 @@
-import { Bot, type Context } from "grammy";
+import { Bot } from "grammy";
 import type { Message, MessageEntity } from "grammy/types";
 import { config, TG_FILE_LIMIT } from "./config.js";
-import { db, findByTextHash, getSetting, insertItem, setSetting, type Item } from "./db.js";
-import { acceptedText, duplicateText, plural } from "./format.js";
+import { db, findByTextHash, insertItem, type Item } from "./db.js";
+import { acceptedText, duplicateText } from "./format.js";
+import { plural, tr } from "./i18n/index.js";
+import { getUserByTg, updateUser, type Ctx, type User } from "./users.js";
 import { fetchTikTok, profileHandle } from "./fetchers.js";
 import { parseHints } from "./hints.js";
 import { registerUi } from "./ui.js";
@@ -60,28 +62,30 @@ function fileOf(m: Message): FileRef | undefined {
   }
 }
 
-function baseRow(m: Message) {
-  return { tg_chat_id: m.chat.id, tg_message_id: m.message_id, origin: "telegram", ...forwardInfo(m) };
+// Every row carries its owner — all reads filter by it.
+function baseRow(m: Message, u: User) {
+  return { user_id: u.id, tg_chat_id: m.chat.id, tg_message_id: m.message_id, origin: "telegram", ...forwardInfo(m) };
 }
 
-async function accept(ctx: Context, row: Partial<Item>) {
-  const reply = await ctx.reply(acceptedText(row.input_kind!, row.origin), { reply_parameters: { message_id: ctx.msg!.message_id } });
+async function accept(ctx: Ctx, row: Partial<Item>) {
+  const d = tr(ctx.user.lang);
+  const reply = await ctx.reply(acceptedText(d, row.input_kind!, row.origin), { reply_parameters: { message_id: ctx.msg!.message_id } });
   try {
     await insertItem({ ...row, reply_message_id: reply.message_id, status: "queued" } as Partial<Item>);
   } catch (e) {
     console.error("insert failed", e);
-    await ctx.api.editMessageText(reply.chat.id, reply.message_id, `❌ не сохранилось: база недоступна (${dbErrorHint(e)})`).catch(() => {});
+    await ctx.api.editMessageText(reply.chat.id, reply.message_id, d.dbDown(dbErrorHint(e, d.dbBadKey))).catch(() => {});
   }
 }
 
-export function dbErrorHint(e: unknown): string {
+export function dbErrorHint(e: unknown, badKey = "invalid SUPABASE_SERVICE_ROLE_KEY in .env"): string {
   const msg = String((e as any)?.message ?? e);
-  if (/invalid api key|401|JWT/i.test(msg)) return "неверный SUPABASE_SERVICE_ROLE_KEY в .env";
+  if (/invalid api key|401|JWT/i.test(msg)) return badKey;
   return msg.slice(0, 200);
 }
 
 // Albums arrive as separate updates with one media_group_id — buffer, then one reply per album.
-const albums = new Map<string, { ctx: Context; msgs: Message[]; timer: NodeJS.Timeout }>();
+const albums = new Map<string, { ctx: Ctx; msgs: Message[]; timer: NodeJS.Timeout }>();
 
 async function flushAlbum(groupId: string) {
   const a = albums.get(groupId)!;
@@ -90,47 +94,56 @@ async function flushAlbum(groupId: string) {
   const files = msgs.map((m) => ({ m, f: fileOf(m)! }));
   const tooBig = files.filter(({ f }) => (f.file_size ?? 0) > TG_FILE_LIMIT).length;
   const ok = files.filter(({ f }) => (f.file_size ?? 0) <= TG_FILE_LIMIT);
+  const u = a.ctx.user;
+  const d = tr(u.lang);
   const reply = await a.ctx.api.sendMessage(msgs[0].chat.id,
-    `🖼 ${plural(ok.length, "скрин", "скрина", "скринов")} · принято${tooBig ? ` · ${tooBig} слишком большие (>20 МБ)` : ""}`,
+    `🖼 ${plural(d, ok.length, d.forms.screens)} · ${d.accepted}${tooBig ? ` · ${d.tooBigN(tooBig)}` : ""}`,
     { reply_parameters: { message_id: msgs[0].message_id } });
   if (!ok.length) return;
   const caption = msgs.find((m) => m.caption)?.caption;
   // One insert so the worker never sees half an album.
   const { error } = await db.from("items").insert(ok.map(({ m, f }) => ({
-    ...baseRow(m), input_kind: f.input_kind, tg_file_id: f.file_id, batch_id: groupId, reply_message_id: reply.message_id,
+    ...baseRow(m, u), input_kind: f.input_kind, tg_file_id: f.file_id, batch_id: groupId, reply_message_id: reply.message_id,
     input: { file_id: f.file_id, mime: f.mime, file_size: f.file_size, text: caption },
   })));
   if (error) throw error;
 }
 
 export function createBot() {
-  const bot = new Bot(config.botToken);
+  const bot = new Bot<Ctx>(config.botToken);
 
-  // Archive channel: remember it when the owner makes the bot admin there.
-  // Confirmation goes to the owner's private chat with the bot; if that fails (no /start yet) — into the channel.
+  // Archive channel: whoever makes the bot admin of a channel gets it as *their* archive.
+  // Confirmation goes to that user's private chat; if that fails (no /start yet) — into the channel.
   bot.on("my_chat_member", async (ctx) => {
-    const u = ctx.myChatMember;
-    if (u.from.id !== config.ownerId || u.chat.type !== "channel") return;
-    const status = u.new_chat_member.status;
+    const m = ctx.myChatMember;
+    if (m.chat.type !== "channel") return;
+    const u = await getUserByTg(m.from.id);
+    if (!u) return; // not a user of the bot
+    const d = tr(u.lang);
+    const status = m.new_chat_member.status;
     if (status === "administrator") {
-      await setSetting("archive_channel_id", String(u.chat.id));
-      const text = `🗄 канал-архив подключён: ${u.chat.title} (${u.chat.id})`;
-      console.log(text);
+      await updateUser(u, { archive_channel_id: m.chat.id });
+      const text = `${d.channel.connected(m.chat.title ?? "")} (${m.chat.id})`;
+      console.log(`user ${u.id}: ${text}`);
       try {
-        await ctx.api.sendMessage(config.ownerId, text);
+        await ctx.api.sendMessage(u.telegram_user_id, text);
       } catch (e) {
-        console.warn("owner DM failed (нажми /start в боте)", e);
-        await ctx.api.sendMessage(u.chat.id, `${text}\nНапиши боту /start в личке — туда будут приходить ответы.`);
+        console.warn(`DM to user ${u.id} failed (no /start yet)`, e);
+        await ctx.api.sendMessage(m.chat.id, `${text}\n${d.channel.pressStart}`);
       }
-    } else if ((status === "left" || status === "kicked" || status === "member") && (await getSetting("archive_channel_id")) === String(u.chat.id)) {
-      await setSetting("archive_channel_id", "");
-      await ctx.api.sendMessage(config.ownerId, `⚠️ бот больше не админ в «${u.chat.title}» — канал-архив отключён`).catch(() => {});
+    } else if ((status === "left" || status === "kicked" || status === "member") && u.archive_channel_id === m.chat.id) {
+      await updateUser(u, { archive_channel_id: null });
+      await ctx.api.sendMessage(u.telegram_user_id, d.channel.disconnected(m.chat.title ?? "")).catch(() => {});
     }
   });
 
-  // Whitelist: everyone else is silently ignored.
+  // Access: only users from the users table (added by an admin with /adduser); everyone else is silently ignored.
   bot.use(async (ctx, next) => {
-    if (ctx.from?.id === config.ownerId && ctx.chat?.type === "private") await next();
+    if (ctx.chat?.type !== "private" || !ctx.from) return;
+    const u = await getUserByTg(ctx.from.id);
+    if (!u) return;
+    ctx.user = u;
+    await next();
   });
 
   registerUi(bot);
@@ -139,6 +152,7 @@ export function createBot() {
 
   // Diagnostics for the TikTok download chain: /probe <links…>
   bot.command("probe", async (ctx) => {
+    if (!ctx.user.is_admin) return;
     const urls = extractUrls(ctx.match);
     if (!urls.length) return ctx.reply("/probe <ссылки на тиктоки>");
     await ctx.reply(`проверяю ${urls.length}…`);
@@ -169,22 +183,23 @@ export function createBot() {
         albums.set(m.media_group_id, entry);
         return;
       }
-      if ((file.file_size ?? 0) > TG_FILE_LIMIT) return ctx.reply("слишком большой (>20 МБ) — не обработать", { reply_parameters: { message_id: m.message_id } });
+      if ((file.file_size ?? 0) > TG_FILE_LIMIT) return ctx.reply(tr(ctx.user.lang).tooBig, { reply_parameters: { message_id: m.message_id } });
       // A screenshot of a profile grid with «профиль» in the caption is analysed as a profile.
       const kind = file.input_kind === "screenshot" && parseHints(m.caption).profile ? "profile" : file.input_kind;
-      return accept(ctx, { ...baseRow(m), input_kind: kind, tg_file_id: file.file_id, input: { file_id: file.file_id, mime: file.mime, file_size: file.file_size, text: m.caption } });
+      return accept(ctx, { ...baseRow(m, ctx.user), input_kind: kind, tg_file_id: file.file_id, input: { file_id: file.file_id, mime: file.mime, file_size: file.file_size, text: m.caption } });
     }
 
     const text = m.text ?? m.caption;
     if (!text) return;
     const urls = extractUrls(text, m.entities ?? m.caption_entities);
     // Repeat: log it as a 'duplicate' row (repeats feed the future "what you keep coming back to"), tell how many times.
-    const dupReply = async (d: Item, row: Partial<Item>) => {
-      const reply = await ctx.reply(duplicateText(d), { ...html, reply_parameters: { message_id: m.message_id } });
+    const d = tr(ctx.user.lang);
+    const dupReply = async (dup: Item, row: Partial<Item>) => {
+      const reply = await ctx.reply(duplicateText(d, dup), { ...html, reply_parameters: { message_id: m.message_id } });
       try {
-        await insertItem({ ...baseRow(m), ...row, status: "duplicate", duplicate_of: d.id, reply_message_id: reply.message_id } as Partial<Item>);
-        const { count } = await db.from("items").select("id", { count: "exact", head: true }).eq("duplicate_of", d.id);
-        if (count) await ctx.api.editMessageText(m.chat.id, reply.message_id, duplicateText(d, count + 1), html);
+        await insertItem({ ...baseRow(m, ctx.user), ...row, status: "duplicate", duplicate_of: dup.id, reply_message_id: reply.message_id } as Partial<Item>);
+        const { count } = await db.from("items").select("id", { count: "exact", head: true }).eq("user_id", ctx.user.id).eq("duplicate_of", dup.id);
+        if (count) await ctx.api.editMessageText(m.chat.id, reply.message_id, duplicateText(d, dup, count + 1), html);
       } catch (e) {
         console.warn("duplicate log failed", e);
       }
@@ -192,20 +207,20 @@ export function createBot() {
 
     if (!urls.length) {
       const hash = textHash(text);
-      const dup = await findByTextHash(hash);
+      const dup = await findByTextHash(ctx.user.id, hash);
       const row = { input_kind: m.forward_origin ? "forwarded" : "text", text_hash: hash, input: { text } };
       if (dup) return dupReply(dup, row);
-      return accept(ctx, { ...baseRow(m), ...row });
+      return accept(ctx, { ...baseRow(m, ctx.user), ...row });
     }
 
     for (const url of urls) {
       const hash = await urlHash(url);
-      const dup = await findByTextHash(hash);
+      const dup = await findByTextHash(ctx.user.id, hash);
       if (dup) {
         await dupReply(dup, { ...classifyUrl(url, text), source_url: url, text_hash: hash, input: { text } });
         continue;
       }
-      await accept(ctx, { ...baseRow(m), ...classifyUrl(url, text), source_url: url, text_hash: hash, input: { text } });
+      await accept(ctx, { ...baseRow(m, ctx.user), ...classifyUrl(url, text), source_url: url, text_hash: hash, input: { text } });
     }
   });
 

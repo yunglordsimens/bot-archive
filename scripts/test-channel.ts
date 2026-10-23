@@ -1,15 +1,10 @@
 // Offline check of archive-channel posts: format/limits, edit vs repost, transcript reply.
-import { createServer } from "node:http";
 import assert from "node:assert/strict";
 
 const CHANNEL = -1001234567890;
-const srv = createServer((req, res) => {
-  res.setHeader("Content-Type", "application/json");
-  res.end(JSON.stringify(req.url!.includes("/settings") ? { value: String(CHANNEL) } : []));
-});
-await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
-Object.assign(process.env, { BOT_TOKEN: "1:x", OWNER_ID: "1", GEMINI_API_KEY: "x", SUPABASE_SERVICE_ROLE_KEY: "x",
-  SUPABASE_URL: `http://127.0.0.1:${(srv.address() as any).port}` });
+Object.assign(process.env, { BOT_TOKEN: "1:x", OWNER_ID: "1", GEMINI_API_KEY: "x", SUPABASE_SERVICE_ROLE_KEY: "x", SUPABASE_URL: "http://127.0.0.1:9" });
+const u: any = { id: 1, telegram_user_id: 1, lang: "ru", archive_channel_id: CHANNEL };
+const cz: any = { ...u, lang: "cs" };
 
 const { Api } = await import("grammy");
 const { postHtml, publishToChannel, rewritePost, postTranscript } = await import("../src/channel.ts");
@@ -31,31 +26,34 @@ const it: any = {
   raw_meta: { en: { title: "Pasta in 10 minutes", summary: "Quick pasta. ".repeat(60), structured: {} } },
 };
 
-const cap = postHtml(it, 1024);
+const cap = postHtml(it, 1024, u);
 const vis = cap.replace(/<[^>]+>/g, "").length;
 assert.ok(vis <= 1024, `caption ${vis}`);
 assert.match(cap, /@chef/); assert.match(cap, /🧭 здоровье и быт/); assert.match(cap, /Зачем мне/); assert.match(cap, /🇬🇧/);
 console.log(`✓ caption fits (${vis} chars):\n` + cap.replace(/<[^>]+>/g, "").slice(0, 300) + "…");
 
-let r = await rewritePost(api, it);
+let r = await rewritePost(api, it, u);
 assert.equal(r.reposted, false); assert.equal(last().method, "editMessageCaption"); assert.equal(last().p.chat_id, CHANNEL);
 console.log("✓ own post → caption edited in place");
 
 editFails = true;
-r = await rewritePost(api, it);
+r = await rewritePost(api, it, u);
 assert.equal(r.reposted, true); assert.equal(last().method, "sendVideo"); assert.equal(last().p.video, "V");
 console.log("✓ not editable → published anew by file_id:", r.link);
 editFails = false;
 
 const text: any = { ...it, input_kind: "text", origin: "telegram", archive_file_ids: [], source_url: null, author: null };
-await publishToChannel(api, text, undefined);
+await publishToChannel(api, text, undefined, u);
 assert.equal(last().method, "sendMessage");
 console.log("✓ text item → text post");
 
-const tr = await postTranscript(api, it, "https://t.me/c/1234567890/77");
+const tr = await postTranscript(api, it, "https://t.me/c/1234567890/77", u);
 assert.equal(last().method, "sendDocument"); assert.equal(last().p.reply_parameters.message_id, 77);
 console.log("✓ long transcript → .txt reply under the post:", tr);
-await postTranscript(api, { ...it, raw_text: "коротко" }, "https://t.me/c/1234567890/77");
+await postTranscript(api, { ...it, raw_text: "коротко" }, "https://t.me/c/1234567890/77", u);
 assert.equal(last().method, "sendMessage");
 console.log("✓ short transcript → text reply");
-srv.close();
+const czPost = postHtml(it, 1024, cz).replace(/<[^>]+>/g, "");
+assert.match(czPost, /Proč pro mě/); assert.match(czPost, /zdroj/);
+assert.doesNotMatch(postHtml(it, 1024, { ...u, lang: "en" }), /🇬🇧/); // English users don't get a duplicate EN block
+console.log("✓ post labels in the user's language; no EN block for English users");

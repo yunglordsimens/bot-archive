@@ -9,6 +9,8 @@ import { addFormatAnalysis, contextText, tgDownload } from "./analysis.js";
 import { fetchComments, fetchMeta, fetchProfile, fetchTikTok, fetchVideoGeneric, fetchWebPage, fetchYouTubeText, profileHandle, resolveTikTok, updateYtdlp, type Fetched } from "./fetchers.js";
 import { postTranscript, publishToChannel, type Publish } from "./channel.js";
 import { batchMessage, duplicateText, failedText, sourceLabel } from "./format.js";
+import { tr, type Dict } from "./i18n/index.js";
+import { getUserById, miscProject, profileOf, type User } from "./users.js";
 import { renderCard } from "./card.js";
 
 const DAY = 24 * 3600 * 1000;
@@ -33,12 +35,13 @@ async function safeArchive(fn: () => Promise<{ fileIds: string[]; link?: string 
 }
 
 // Status line on the "принято" message while the item is being processed.
-async function stage(api: Api, it: Item, text: string) {
+async function stage(api: Api, it: Item, d: Dict, text: string) {
   if (!it.reply_message_id || it.batch_id) return;
-  await api.editMessageText(it.tg_chat_id, it.reply_message_id, `${sourceLabel(it.input_kind, it.origin)} · ${text}`).catch(() => {});
+  await api.editMessageText(it.tg_chat_id, it.reply_message_id, `${sourceLabel(d, it.input_kind, it.origin)} · ${text}`).catch(() => {});
 }
 
-async function processVideoLink(api: Api, it: Item, f: Fetched, commentsP: Promise<string[]>): Promise<Result> {
+async function processVideoLink(api: Api, it: Item, u: User, f: Fetched, commentsP: Promise<string[]>): Promise<Result> {
+  const d = tr(u.lang);
   const comments = await commentsP;
   const media: Part[] = [];
   if (f.video) media.push(await mediaPart(f.video.buf, f.video.mime));
@@ -47,10 +50,10 @@ async function processVideoLink(api: Api, it: Item, f: Fetched, commentsP: Promi
     "Описание под видео (подпись автора)": f.caption, "Автор": f.author, "Субтитры автора": f.subtitles, "Топ-комментарии": commentsText(comments),
   })), ...media];
   const hasMedia = !!(f.video || f.images?.length);
-  await stage(api, it, hasMedia ? `🧠 разбираю ${f.images?.length ? "картинки" : "видео"}…` : "🧠 видео не скачалось, разбираю подпись…");
+  await stage(api, it, d, hasMedia ? (f.images?.length ? d.stage.thinkImages : d.stage.thinkVideo) : d.stage.noVideo);
   if (!hasMedia) parts.push(textPart("Видео не удалось скачать — опирайся только на подпись и автора."));
 
-  const analysis = await analyze(parts);
+  const analysis = await analyze(parts, profileOf(u));
   const patch: Record<string, unknown> = { caption: f.caption, author: f.author, raw_meta: {
     via: f.via, log: f.log, stats: f.stats, comments, author_url: f.authorUrl ?? profileUrl(it.origin, f.author), published_at: f.stats?.published_at ?? f.date,
   } };
@@ -60,22 +63,23 @@ async function processVideoLink(api: Api, it: Item, f: Fetched, commentsP: Promi
   return { analysis, patch, status: hasMedia ? "ok" : "pending_media", publish: hasMedia ? { kind: "upload", video: f.video, images: f.images } : undefined, media };
 }
 
-async function processItem(api: Api, it: Item): Promise<Result> {
+async function processItem(api: Api, it: Item, u: User): Promise<Result> {
+  const p = profileOf(u);
   const kind = it.input_kind === "link" ? it.origin : it.input_kind;
   switch (kind) {
     case "tiktok": {
       // A shared TikTok link can point to a profile, not a video.
       const r = await resolveTikTok(it.source_url!);
-      if (!r.id && profileHandle(r.url)) return processProfile(api, { ...it, source_url: r.url });
+      if (!r.id && profileHandle(r.url)) return processProfile(api, { ...it, source_url: r.url }, u);
       const comments = fetchComments(it.source_url!, "tiktok"); // in parallel with the download
-      return processVideoLink(api, it, await fetchTikTok(it.source_url!), comments);
+      return processVideoLink(api, it, u, await fetchTikTok(it.source_url!), comments);
     }
     case "instagram": {
       const comments = fetchComments(it.source_url!, "instagram");
-      return processVideoLink(api, it, await fetchVideoGeneric(it.source_url!), comments);
+      return processVideoLink(api, it, u, await fetchVideoGeneric(it.source_url!), comments);
     }
     case "profile":
-      return processProfile(api, it);
+      return processProfile(api, it, u);
 
     case "youtube": {
       const meta = fetchMeta(it.source_url!); // in parallel with Gemini
@@ -86,27 +90,27 @@ async function processItem(api: Api, it: Item): Promise<Result> {
       };
       try {
         const media = [urlPart(it.source_url!)];
-        const analysis = await analyze([textPart(contextText(it, { "Топ-комментарии": commentsText(comments) })), ...media]);
+        const analysis = await analyze([textPart(contextText(it, { "Топ-комментарии": commentsText(comments) })), ...media], p);
         return { analysis, patch: await ytPatch(), status: "ok", media };
       } catch (e) {
         console.warn(`youtube direct failed for ${it.id}, falling back to subs`, e);
         const y = await fetchYouTubeText(it.source_url!);
         const analysis = await analyze([textPart(contextText(it, {
           "Название": y.title, "Канал": y.author, "Описание": y.description?.slice(0, 3000), "Субтитры": y.subs,
-        }))]);
+        }))], p);
         return { analysis, patch: { ...(await ytPatch()), author: y.author, caption: y.title }, status: "ok" };
       }
     }
 
     case "other": {
-      const p = await fetchWebPage(it.source_url!);
-      const analysis = await analyze([textPart(contextText(it, { "Сайт": p.site, "Заголовок": p.title, "Текст страницы": p.text }))]);
-      return { analysis, patch: { caption: p.title, author: p.site }, status: "ok" };
+      const page = await fetchWebPage(it.source_url!);
+      const analysis = await analyze([textPart(contextText(it, { "Сайт": page.site, "Заголовок": page.title, "Текст страницы": page.text }))], p);
+      return { analysis, patch: { caption: page.title, author: page.site }, status: "ok" };
     }
 
     case "text":
     case "forwarded": {
-      const analysis = await analyze([textPart(contextText(it, { "Текст": it.input.text }))]);
+      const analysis = await analyze([textPart(contextText(it, { "Текст": it.input.text }))], p);
       return { analysis, patch: {}, status: "ok" };
     }
 
@@ -115,21 +119,21 @@ async function processItem(api: Api, it: Item): Promise<Result> {
       const buf = await tgDownload(api, it.input.file_id!);
       const hash = createHash("sha256").update(buf).digest("hex");
       if (it.input_kind === "screenshot") {
-        const dup = await findByHash(hash, it.id);
+        const dup = await findByHash(it.user_id, hash, it.id);
         if (dup) {
           return { analysis: dup as unknown as Analysis, status: "duplicate",
             patch: { media_hash: hash, duplicate_of: dup.id, title: dup.title, kind: dup.kind } };
         }
       }
       const media = [await mediaPart(buf, it.input.mime ?? "application/octet-stream")];
-      const analysis = await analyze([textPart(contextText(it, { "Подпись": it.input.text })), ...media]);
+      const analysis = await analyze([textPart(contextText(it, { "Подпись": it.input.text })), ...media], p);
       return { analysis, status: "ok", patch: { media_hash: hash, archive_file_ids: [it.input.file_id] }, publish: { kind: "copy" }, media };
     }
   }
 }
 
 // Profile / account (SPEC §5.3a): a link (public data) or a screenshot of the profile grid.
-async function processProfile(api: Api, it: Item): Promise<Result> {
+async function processProfile(api: Api, it: Item, u: User): Promise<Result> {
   const extra: Record<string, string | undefined> = { "Тип записи": "профиль / аккаунт" };
   const patch: Record<string, unknown> = {};
   const media: Part[] = [];
@@ -147,27 +151,28 @@ async function processProfile(api: Api, it: Item): Promise<Result> {
     patch.source_url = it.source_url;
     patch.raw_meta = { author_url: it.source_url, profile: { followers: p.followers, following: p.following, posts: p.posts, likes: p.likes, bio: p.bio, platform: p.platform, verified: p.verified } };
   }
-  const analysis = await analyze([textPart(contextText(it, extra)), ...media]);
+  const analysis = await analyze([textPart(contextText(it, extra)), ...media], profileOf(u));
   const meta = (patch.raw_meta ?? {}) as RawMeta;
   patch.raw_meta = { ...meta, profile: { ...meta.profile, entity: analysis.entity } };
   return { analysis, patch, status: "ok", publish: media.length ? { kind: "copy" } : undefined, media };
 }
 
-async function finishReply(api: Api, it: Item) {
+async function finishReply(api: Api, it: Item, u: User) {
   if (!it.reply_message_id) return;
+  const d = tr(u.lang);
   let text: string;
   if (it.batch_id) {
-    const { data } = await db.from("items").select().eq("batch_id", it.batch_id).order("id");
+    const { data } = await db.from("items").select().eq("user_id", it.user_id).eq("batch_id", it.batch_id).order("id");
     const batch = (data ?? []) as Item[];
     if (batch.some((b) => b.status === "queued" || b.status === "processing")) return;
-    text = batchMessage(batch);
+    text = batchMessage(d, batch, miscProject(u));
   } else if (it.status === "failed") {
-    text = failedText(it);
+    text = failedText(d, it);
   } else if (it.status === "duplicate") {
     const { data } = await db.from("items").select("title, summary, created_at, archive_link").eq("id", it.duplicate_of!).single();
-    text = data ? duplicateText(data) : "♻️ уже есть";
+    text = data ? duplicateText(d, data) : d.dup("");
   } else {
-    const c = renderCard(it, "short");
+    const c = renderCard(it, "short", u);
     await api.editMessageText(it.tg_chat_id, it.reply_message_id, c.text, { parse_mode: "HTML", link_preview_options: { is_disabled: true }, reply_markup: c.kb })
       .catch((e) => { if (!String(e?.description ?? e).includes("not modified")) console.warn("edit reply failed", e); });
     return;
@@ -176,7 +181,7 @@ async function finishReply(api: Api, it: Item) {
     const retry = !it.batch_id && it.status === "failed";
     await api.editMessageText(it.tg_chat_id, it.reply_message_id, text, {
       parse_mode: "HTML", link_preview_options: { is_disabled: true },
-      ...(retry ? { reply_markup: new InlineKeyboard().text("🔁 Повторить", `retry:${it.id}`) } : {}),
+      ...(retry ? { reply_markup: new InlineKeyboard().text(d.card.retry, `retry:${it.id}`) } : {}),
     });
   } catch (e: any) {
     if (!String(e?.description ?? e).includes("not modified")) console.warn("edit reply failed", e);
@@ -184,15 +189,15 @@ async function finishReply(api: Api, it: Item) {
 }
 
 // Closest saved item by meaning; only returned when it's really close (SIMILAR_THRESHOLD).
-export async function nearest(embedding: string, id: number): Promise<Similar | undefined> {
-  const { data, error } = await db.rpc("nearest_item", { query: embedding, exclude: id });
+export async function nearest(embedding: string, id: number, uid: number): Promise<Similar | undefined> {
+  const { data, error } = await db.rpc("nearest_item", { query: embedding, exclude: id, uid });
   if (error) return void console.warn("nearest_item failed", error);
   const top = (data as Similar[] | null)?.[0];
   return top && top.similarity > config.similarThreshold ? top : undefined;
 }
 
 // Analysis → item fields, embedding, "похоже на", EN translation (for the channel post and the EN button).
-export async function applyAnalysis(it: Item, a: Analysis, patch: Record<string, unknown>) {
+export async function applyAnalysis(it: Item, a: Analysis, patch: Record<string, unknown>, u: User) {
   const hints = parseHints(it.input?.text);
   Object.assign(patch, {
     title: a.title, summary: a.summary, content_type: a.content_type, kind: a.kind, why_me: a.why_me,
@@ -203,10 +208,11 @@ export async function applyAnalysis(it: Item, a: Analysis, patch: Record<string,
     embedding: JSON.stringify(await embed(`${a.title}\n${a.summary}\n${a.raw_text}`)),
   });
   const meta: RawMeta = { ...it.raw_meta, ...(patch.raw_meta as RawMeta), v: FORMAT_VERSION };
-  const similar = await nearest(patch.embedding as string, it.id);
+  const similar = await nearest(patch.embedding as string, it.id, it.user_id);
   if (similar) meta.similar = similar;
   try {
-    meta.en = await translateCard({ title: a.title, summary: a.summary, structured: a.structured, why_me: a.why_me });
+    const card = { title: a.title, summary: a.summary, structured: a.structured, why_me: a.why_me };
+    meta.en = u.lang === "en" ? card : await translateCard(card); // summary + "why me" in the user's language and in English
   } catch (e) {
     console.warn(`translation failed for ${it.id}`, e);
     delete meta.en;
@@ -215,35 +221,37 @@ export async function applyAnalysis(it: Item, a: Analysis, patch: Record<string,
 }
 
 // Every item gets a post in the archive channel (new format) + transcript reply under it.
-async function publishItem(api: Api, it: Item, patch: Record<string, unknown>, pub: Publish) {
+async function publishItem(api: Api, it: Item, patch: Record<string, unknown>, pub: Publish, u: User) {
   const full = { ...it, ...patch } as Item;
-  const posted = await safeArchive(() => publishToChannel(api, full, pub), patch);
+  const posted = await safeArchive(() => publishToChannel(api, full, pub, u), patch);
   if (!posted.link) return;
   patch.archive_link = posted.link;
   if (posted.fileIds.length) Object.assign(patch, { archive_file_ids: posted.fileIds, tg_file_id: posted.fileIds[0] });
-  const transcript = await postTranscript(api, { ...full, archive_link: posted.link }, posted.link).catch((e) => void console.warn("transcript post failed", e));
+  const transcript = await postTranscript(api, { ...full, archive_link: posted.link }, posted.link, u).catch((e) => void console.warn("transcript post failed", e));
   if (transcript) patch.raw_meta = { ...(patch.raw_meta as RawMeta), transcript_link: transcript };
 }
 
 const MAX_TRANSIENT_ATTEMPTS = 4;
 const isTransient = (e: string) => /503|500|429|UNAVAILABLE|overloaded|high demand|RESOURCE_EXHAUSTED|fetch failed|ECONNRESET|ETIMEDOUT|socket hang up/i.test(e);
-const errorReasonShort = (e: string) => (/429|RESOURCE_EXHAUSTED/i.test(e) ? "лимит Gemini" : /fetch failed|ECONN|ETIMEDOUT|socket/i.test(e) ? "нет связи" : "Gemini перегружен");
+const errorReasonShort = (d: Dict, e: string) => (/429|RESOURCE_EXHAUSTED/i.test(e) ? d.errors.quota : /fetch failed|ECONN|ETIMEDOUT|socket/i.test(e) ? d.errors.network : d.errors.overloaded);
 
-async function handle(api: Api, it: Item) {
+export async function handle(api: Api, it: Item) {
+  const u = await getUserById(it.user_id);
+  const d = tr(u.lang);
   const downloads = it.input_kind === "tiktok" || it.origin === "instagram";
-  await stage(api, it, downloads ? "⬇️ скачиваю…" : it.input_kind === "link" ? "🔎 читаю…" : "🧠 разбираю…");
+  await stage(api, it, d, downloads ? d.stage.download : it.input_kind === "link" || it.input_kind === "profile" ? d.stage.read : d.stage.think);
   try {
-    const r = await processItem(api, it);
+    const r = await processItem(api, it, u);
     const a = r.analysis;
     const patch: Record<string, unknown> = { ...r.patch, status: r.status };
     if (r.status !== "duplicate") {
-      await applyAnalysis(it, a, patch);
+      await applyAnalysis(it, a, patch, u);
       // Deep format analysis only when the form matters (value_in) or the caption asks for it.
       if (r.media?.length && (needsFormatAnalysis(patch.value_in as string[]) || parseHints(it.input?.text).deepFormat)) {
-        await stage(api, it, "🎬 разбираю формат…");
-        await addFormatAnalysis(it, r.media, patch).catch((e) => console.warn(`format analysis failed for ${it.id}`, e));
+        await stage(api, it, d, d.stage.format);
+        await addFormatAnalysis(it, r.media, patch, d.geminiLanguage).catch((e) => console.warn(`format analysis failed for ${it.id}`, e));
       }
-      await publishItem(api, it, patch, r.publish);
+      await publishItem(api, it, patch, r.publish, u);
     }
     await updateItem(it.id, patch);
     Object.assign(it, patch);
@@ -254,14 +262,14 @@ async function handle(api: Api, it: Item) {
       const min = 5 * it.attempts;
       console.warn(`item ${it.id}: temporary error, retry in ${min} min — ${error.slice(0, 200)}`);
       await updateItem(it.id, { status: "queued", error, next_retry_at: new Date(Date.now() + min * 60_000).toISOString() });
-      await stage(api, it, `⏳ ${errorReasonShort(error)} — повторю через ${min} мин`);
+      await stage(api, it, d, d.stage.retryIn(errorReasonShort(d, error), min));
       return;
     }
     console.error(`item ${it.id} failed`, e);
     await updateItem(it.id, { status: "failed", error });
     Object.assign(it, { status: "failed", error });
   }
-  await finishReply(api, it);
+  await finishReply(api, it, u);
 }
 
 let lastYtdlpUpdate = 0;

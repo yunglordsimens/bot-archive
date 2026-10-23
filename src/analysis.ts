@@ -60,11 +60,11 @@ export async function originalMedia(api: Api, it: Item, log: string[]): Promise<
 }
 
 // Deep format analysis (SPEC §3.9) + hook_embedding — groups videos by the trick, not by topic.
-export async function addFormatAnalysis(it: Item, media: Part[], patch: Record<string, unknown>) {
+export async function addFormatAnalysis(it: Item, media: Part[], patch: Record<string, unknown>, language: string) {
   const full = { ...it, ...patch } as Item;
   const hook = await analyzeFormat([textPart(contextText(full, {
     "Суть": full.summary ?? undefined, "Что в кадре": full.visual_description ?? undefined, "Своя заметка пользователя (важнее всего)": full.my_note ?? undefined,
-  })), ...media]);
+  })), ...media], language);
   patch.hook = hook;
   const key = [full.my_note, hook.looks_accidental, hook.probably_deliberate, hook.how_hidden, hook.mismatch, hook.reusable_move].filter(Boolean).join("\n");
   patch.hook_embedding = JSON.stringify(await embed(key));

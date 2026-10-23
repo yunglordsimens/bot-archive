@@ -8,7 +8,9 @@ import { postTranscript, rewritePost } from "./channel.js";
 import { applyAnalysis } from "./worker.js";
 import { addFormatAnalysis, contextText, originalMedia } from "./analysis.js";
 import { renderCard } from "./card.js";
-import { esc, plural } from "./format.js";
+import { esc } from "./format.js";
+import { plural, tr } from "./i18n/index.js";
+import { profileOf, type Ctx, type User } from "./users.js";
 
 // /reprocess — bring saved items to the current format: re-run Gemini on the original from the archive
 // channel, fill author / project / theme / why_me / EN / transcript, rewrite the channel post.
@@ -17,9 +19,10 @@ import { esc, plural } from "./format.js";
 //   /reprocess <id>   — one item
 
 const html = { parse_mode: "HTML" as const, link_preview_options: { is_disabled: true } };
-let running = false;
+const running = new Set<number>(); // user ids with a /reprocess in progress
 
-async function reprocessItem(api: Api, it: Item): Promise<{ reposted: boolean; link?: string }> {
+async function reprocessItem(api: Api, it: Item, u: User): Promise<{ reposted: boolean; link?: string }> {
+  const d = tr(u.lang);
   const log: string[] = [];
   const patch: Record<string, unknown> = {};
   const meta: RawMeta = { ...it.raw_meta };
@@ -56,38 +59,39 @@ async function reprocessItem(api: Api, it: Item): Promise<{ reposted: boolean; l
     if (!media.length) extra["Сохранённый текст и суть"] = [it.raw_text, it.summary].filter(Boolean).join("\n\n");
   }
 
-  const a = await analyze([textPart(contextText(it, extra)), ...media]);
+  const a = await analyze([textPart(contextText(it, extra)), ...media], profileOf(u));
   patch.raw_meta = { ...meta, reprocess_log: log };
-  await applyAnalysis(it, a, patch);
+  await applyAnalysis(it, a, patch, u);
   if (media.length && (needsFormatAnalysis(patch.value_in as string[]) || parseHints(it.input?.text).deepFormat) && !it.hook) {
-    await addFormatAnalysis(it, media, patch).catch((e) => log.push(`разбор формата не удался: ${(e as Error).message?.slice(0, 80)}`));
+    await addFormatAnalysis(it, media, patch, d.geminiLanguage).catch((e) => log.push(`разбор формата не удался: ${(e as Error).message?.slice(0, 80)}`));
   }
   const full = { ...it, ...patch } as Item;
 
-  const post = await rewritePost(api, full);
+  const post = await rewritePost(api, full, u);
   if (post.link) {
     full.archive_link = patch.archive_link = post.link;
-    const transcript = await postTranscript(api, full, post.link).catch(() => undefined);
+    const transcript = await postTranscript(api, full, post.link, u).catch(() => undefined);
     if (transcript) patch.raw_meta = { ...(patch.raw_meta as RawMeta), transcript_link: transcript };
   }
   await updateItem(it.id, patch);
 
   // Refresh the card in the chat, if it's still there.
   if (full.reply_message_id && !full.batch_id) {
-    const c = renderCard({ ...full, ...patch } as Item, "short");
+    const c = renderCard({ ...full, ...patch } as Item, "short", u);
     await api.editMessageText(full.tg_chat_id, full.reply_message_id, c.text, { ...html, reply_markup: c.kb }).catch(() => {});
   }
   return { reposted: post.reposted, link: post.link };
 }
 
-async function run(api: Api, items: Item[], chatId: number, progressId: number) {
+async function run(api: Api, u: User, items: Item[], chatId: number, progressId: number) {
+  const d = tr(u.lang);
   const reposted: { it: Item; link?: string }[] = [];
   const failed: { it: Item; error: string }[] = [];
   let edited = 0;
   for (const [i, it] of items.entries()) {
-    await api.editMessageText(chatId, progressId, `🔄 перепрохожу ${i + 1}/${items.length}…`).catch(() => {});
+    await api.editMessageText(chatId, progressId, d.reprocess.progress(i + 1, items.length)).catch(() => {});
     try {
-      const r = await reprocessItem(api, it);
+      const r = await reprocessItem(api, it, u);
       if (r.reposted) reposted.push({ it, link: r.link });
       else edited++;
     } catch (e) {
@@ -96,32 +100,33 @@ async function run(api: Api, items: Item[], chatId: number, progressId: number) 
     }
   }
   const title = (it: Item) => esc(it.title ?? it.source_url ?? `#${it.id}`);
-  const lines = [`✅ <b>перепройдено: ${items.length - failed.length} из ${items.length}</b>`, `✏️ посты в канале переписаны: ${edited}`];
+  const lines = [d.reprocess.done(items.length - failed.length, items.length), d.reprocess.edited(edited)];
   if (reposted.length) {
-    lines.push(``, `📤 <b>выложено заново</b> (старый пост бот изменить не смог или поста не было): ${reposted.length}`);
+    lines.push(``, d.reprocess.reposted(reposted.length));
     for (const r of reposted) lines.push(`• ${r.link ? `<a href="${r.link}">${title(r.it)}</a>` : title(r.it)}`);
   }
   if (failed.length) {
-    lines.push(``, `⚠️ <b>не получилось</b>: ${failed.length}`);
+    lines.push(``, d.reprocess.failed(failed.length));
     for (const f of failed) lines.push(`• ${title(f.it)} — ${esc(f.error.slice(0, 120))}`);
   }
   const text = lines.join("\n");
   await api.editMessageText(chatId, progressId, text.slice(0, 4000), html).catch(() => api.sendMessage(chatId, text.slice(0, 4000), html));
 }
 
-export function registerReprocess(bot: Bot) {
+export function registerReprocess(bot: Bot<Ctx>) {
   bot.command("reprocess", async (ctx) => {
-    if (running) return ctx.reply("уже идёт — дождись отчёта");
+    const d = tr(ctx.user.lang);
+    if (running.has(ctx.user.id)) return ctx.reply(d.reprocess.running);
     const arg = ctx.match.trim().toLowerCase();
-    let q = db.from("items").select().in("status", ["ok", "pending_media"]).order("id");
+    let q = db.from("items").select().eq("user_id", ctx.user.id).in("status", ["ok", "pending_media"]).order("id");
     if (/^\d+$/.test(arg)) q = q.eq("id", Number(arg));
     const { data, error } = await q;
     if (error) throw error;
     const items = ((data ?? []) as Item[]).filter((it) => arg === "all" || /^\d+$/.test(arg) || (it.raw_meta?.v ?? 0) < FORMAT_VERSION);
-    if (!items.length) return ctx.reply("все записи уже в новом формате. Принудительно: /reprocess all");
-    const msg = await ctx.reply(`🔄 перепрохожу ${plural(items.length, "запись", "записи", "записей")}… это займёт пару минут, отчёт пришлю сюда`);
-    running = true;
+    if (!items.length) return ctx.reply(d.reprocess.allDone);
+    const msg = await ctx.reply(d.reprocess.start(plural(d, items.length, d.forms.items)));
+    running.add(ctx.user.id);
     // In the background: the bot keeps answering while this runs.
-    void run(ctx.api, items, ctx.chat.id, msg.message_id).finally(() => { running = false; });
+    void run(ctx.api, ctx.user, items, ctx.chat.id, msg.message_id).finally(() => running.delete(ctx.user.id));
   });
 }

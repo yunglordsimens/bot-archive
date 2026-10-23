@@ -10,6 +10,7 @@ function env(name: string, fallback?: string): string {
 export const config = {
   botToken: env("BOT_TOKEN"),
   ownerId: Number(env("OWNER_ID")),
+  // Owner only: fallback archive channel if the bot wasn't made admin of one yet.
   archiveChannelId: process.env.ARCHIVE_CHANNEL_ID ? Number(process.env.ARCHIVE_CHANNEL_ID) : undefined,
   supabaseUrl: env("SUPABASE_URL"),
   supabaseKey: env("SUPABASE_SERVICE_ROLE_KEY"),
@@ -24,67 +25,7 @@ export const config = {
   tmpDir: env("TMP_DIR", "/tmp/bot-archive"),
 };
 
-// Life directions (SPEC §5.0): an item can belong to several. Hints help the model choose — edit freely.
-export const PROJECTS: Record<string, string> = {
-  "Lock in / деньги": "заработок, продуктивность, дисциплина, финансы",
-  "OFST": "",
-  "обмен": "",
-  "дропшиппинг": "товары, поставщики, магазины, реклама товаров",
-  "сайты на продажу": "сделать сайт и продать его, веб-студия, клиенты на сайты",
-  "UMPRUM": "учёба в UMPRUM (Прага): задания, курсы, преподаватели",
-  "личный бренд": "свой контент, соцсети, как себя показывать",
-  "арт и портфолио": "собственные работы, портфолио, выставки",
-  "другой бизнес": "бизнес-идеи вне перечисленных направлений",
-  "здоровье и быт": "здоровье, спорт, еда, дом",
-  "státnice": "государственные экзамены (státnice): подготовка, вопросы",
-  "разное": "ничего из перечисленного",
-};
-
-// Fixed theme list — edit here.
-export const THEMES = [
-  "типографика и шрифты",
-  "дизайн-референсы",
-  "зацепы и маркетинг",
-  "деньги и бизнес-идеи",
-  "код и инструменты",
-  "учёба",
-  "рецепты",
-  "смешное",
-  "разное",
-];
-
-export const TYPES: Record<string, { ru: string; emoji: string }> = {
-  tip: { ru: "совет", emoji: "💡" },
-  recipe: { ru: "рецепт", emoji: "🍳" },
-  idea: { ru: "идея", emoji: "✨" },
-  funny: { ru: "смешное", emoji: "😂" },
-  reference: { ru: "референс", emoji: "🎨" },
-  other: { ru: "другое", emoji: "📌" },
-};
-
-// SPEC §5.3a: how the owner relates to an item, and where its value is.
-export const STANCE_LABEL: Record<string, string> = {
-  like: "❤️ нравится", dislike: "👎 не нравится", anti_example: "🚫 антипример", replicate: "🎯 хочу повторить",
-  format_idea: "🧪 идея формата", seen_before: "👀 уже видела", example: "🔖 пример", interesting: "🤔 интересно",
-};
-export const VALUE_LABEL: Record<string, string> = {
-  info: "📚 инфа", visual: "🖼 картинка", audio: "🎧 звук", format: "🎬 формат", meta: "🧠 мета",
-};
-
-export const SOURCE_LABEL: Record<string, string> = {
-  tiktok: "🎵 тикток",
-  youtube: "▶️ youtube",
-  instagram: "📸 reels",
-  link: "🔗 ссылка",
-  text: "📝 текст",
-  forwarded: "↪️ пересланное",
-  screenshot: "🖼 скрин",
-  voice: "🎙 голосовое",
-  audio: "🎧 аудио",
-  video: "🎬 видео",
-  video_note: "⭕️ кружочек",
-  document: "📄 файл",
-  profile: "👤 профиль",
-};
+// Content types: keys are stored in the DB, labels come from the translation files.
+export const TYPE_EMOJI: Record<string, string> = { tip: "💡", recipe: "🍳", idea: "✨", funny: "😂", reference: "🎨", other: "📌" };
 
 export const TG_FILE_LIMIT = 20 * 1024 * 1024;

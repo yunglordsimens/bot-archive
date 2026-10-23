@@ -1,8 +1,9 @@
 import { InputFile, type Api } from "grammy";
-import { TYPES } from "./config.js";
 import type { Item } from "./db.js";
 import { archiveChannel, archiveUpload, link } from "./archive.js";
-import { esc } from "./format.js";
+import { esc, typeLabel } from "./format.js";
+import { fmtDate, tr, type Dict } from "./i18n/index.js";
+import type { User } from "./users.js";
 import type { Media } from "./fetchers.js";
 
 // Archive-channel post: title, @author, directions · theme · type, summary, «Зачем мне», EN.
@@ -17,42 +18,42 @@ export type Publish = { kind: "upload"; video?: Media; images?: Media[] } | { ki
 const visible = (html: string) => html.replace(/<[^>]+>/g, "").replace(/&(lt|gt|amp);/g, "x").length;
 const cut = (s: string, n: number) => (s.length > n ? `${s.slice(0, Math.max(0, n - 1))}…` : s);
 
-const fmtDate = (iso?: string | null) => (iso ? new Date(iso).toLocaleDateString("ru-RU", { day: "numeric", month: "short", year: "numeric" }) : "");
 const fmtNum = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}K` : String(n));
 
 // "@author (link to profile) · 📅 date of the original · source"
-function authorLine(it: Item) {
+function authorLine(d: Dict, it: Item) {
   const who = it.author ?? it.origin_detail;
   const handle = who ? (/\s/.test(who) ? who : `@${who.replace(/^@/, "")}`) : "";
   const url = it.raw_meta?.author_url;
   const author = handle ? (url ? `<a href="${url}">${esc(handle)}</a>` : esc(handle)) : "";
-  const published = fmtDate(it.raw_meta?.published_at ?? it.raw_meta?.stats?.published_at ?? it.occurred_at);
-  const src = it.source_url && it.input_kind !== "profile" ? `<a href="${it.source_url}">источник</a>` : "";
+  const date = it.raw_meta?.published_at ?? it.raw_meta?.stats?.published_at ?? it.occurred_at;
+  const published = date ? fmtDate(d, date, true) : "";
+  const src = it.source_url && it.input_kind !== "profile" ? `<a href="${it.source_url}">${d.post.source}</a>` : "";
   return [author, published && `📅 ${published}`, src].filter(Boolean).join(" · ");
 }
 
-function profileLine(it: Item) {
+function profileLine(d: Dict, it: Item) {
   const p = it.raw_meta?.profile;
   if (it.input_kind !== "profile" || !p) return "";
-  const entity = p.entity === "company" ? "🏢 компания" : p.entity === "person" ? "🙂 человек" : "";
-  return [p.followers != null && `👥 ${fmtNum(p.followers)} подписчиков`, entity].filter(Boolean).join(" · ");
+  const entity = p.entity === "company" ? d.post.company : p.entity === "person" ? d.post.person : "";
+  return [p.followers != null && `👥 ${d.post.followers(fmtNum(p.followers))}`, entity].filter(Boolean).join(" · ");
 }
 
 // Post: title · @author · date · directions/themes · summary · «Зачем мне» · EN · original description.
 // No transcript here — it goes as a reply under the post. Long parts shrink until the post fits the limit.
-export function postHtml(it: Item, limit: number): string {
-  const t = TYPES[it.content_type ?? "other"] ?? TYPES.other;
+export function postHtml(it: Item, limit: number, u: User): string {
+  const d = tr(u.lang);
   const projects = (it.project ?? []).join(", ");
-  const meta = [projects && `🧭 ${esc(projects)}`, it.theme && `🗂 ${esc(it.theme)}`, `${t.emoji} ${t.ru}`].filter(Boolean).join(" · ");
-  const en = it.raw_meta?.en;
+  const meta = [projects && `🧭 ${esc(projects)}`, it.theme && `🗂 ${esc(it.theme)}`, typeLabel(d, it.content_type)].filter(Boolean).join(" · ");
+  const en = u.lang === "en" ? undefined : it.raw_meta?.en; // English users already read it in English
   const caption = it.caption?.trim();
   let budget = 1500;
   for (;;) {
-    const head = [`<b>${esc(cut(it.title ?? "", 200))}</b>`, authorLine(it), profileLine(it), meta].filter(Boolean).join("\n");
+    const head = [`<b>${esc(cut(it.title ?? "", 200))}</b>`, authorLine(d, it), profileLine(d, it), meta].filter(Boolean).join("\n");
     const blocks = [
       head,
       esc(cut(it.summary ?? "", budget)),
-      it.why_me && `💭 <b>Зачем мне:</b> ${esc(cut(it.why_me, Math.round(budget / 2)))}`,
+      it.why_me && `💭 <b>${d.post.why}:</b> ${esc(cut(it.why_me, Math.round(budget / 2)))}`,
       en && `🇬🇧 <b>${esc(cut(en.title, 150))}</b> — ${esc(cut(en.summary, Math.round(budget * 0.6)))}`,
       caption && it.input_kind !== "text" && it.input_kind !== "forwarded" && `📝 <i>${esc(cut(caption, Math.round(budget * 0.4)))}</i>`,
     ].filter(Boolean);
@@ -96,19 +97,19 @@ async function sendByFileId(api: Api, ch: number, it: Item, caption: string): Pr
 }
 
 // New post for an item. Returns the link and file ids of uploaded media.
-export async function publishToChannel(api: Api, it: Item, pub: Publish): Promise<{ fileIds: string[]; link?: string }> {
-  const ch = await archiveChannel();
+export async function publishToChannel(api: Api, it: Item, pub: Publish, u: User): Promise<{ fileIds: string[]; link?: string }> {
+  const ch = archiveChannel(u);
   if (!ch) return { fileIds: [] };
   if (pub?.kind === "upload" && (pub.video || pub.images?.length)) {
-    return archiveUpload(api, pub, postHtml(it, CAPTION_MAX));
+    return archiveUpload(api, ch, pub, postHtml(it, CAPTION_MAX, u));
   }
   if (!pub && hasFile(it) && !it.input?.file_id) {
     // Downloaded media already in the channel (TikTok/Reels): re-send by file_id.
-    return { fileIds: [], link: link(ch, await sendByFileId(api, ch, it, postHtml(it, CAPTION_MAX))) };
+    return { fileIds: [], link: link(ch, await sendByFileId(api, ch, it, postHtml(it, CAPTION_MAX, u))) };
   }
   if (pub?.kind === "copy" || (!pub && hasFile(it))) {
     // File sent to the bot by the user: copy their message (keeps the original type), file_id as fallback.
-    const caption = postHtml(it, CAPTION_MAX);
+    const caption = postHtml(it, CAPTION_MAX, u);
     if (it.input_kind === "video_note") return { fileIds: [], link: link(ch, await sendByFileId(api, ch, it, caption)) };
     try {
       const m = await api.copyMessage(ch, it.tg_chat_id, it.tg_message_id, { caption, parse_mode: "HTML" });
@@ -117,36 +118,37 @@ export async function publishToChannel(api: Api, it: Item, pub: Publish): Promis
       return { fileIds: [], link: link(ch, await sendByFileId(api, ch, it, caption)) };
     }
   }
-  const m = await api.sendMessage(ch, postHtml(it, TEXT_MAX), { parse_mode: "HTML" });
+  const m = await api.sendMessage(ch, postHtml(it, TEXT_MAX, u), { parse_mode: "HTML" });
   return { fileIds: [], link: link(ch, m.message_id) };
 }
 
 // Edit the existing post into the current format; if that's impossible, publish anew.
-export async function rewritePost(api: Api, it: Item): Promise<{ link?: string; reposted: boolean }> {
+export async function rewritePost(api: Api, it: Item, u: User): Promise<{ link?: string; reposted: boolean }> {
   const target = it.archive_link ? parseLink(it.archive_link) : undefined;
   if (target && it.input_kind !== "video_note") {
     try {
-      if (hasFile(it)) await api.editMessageCaption(target.chat, target.msg, { caption: postHtml(it, CAPTION_MAX), parse_mode: "HTML" });
-      else await api.editMessageText(target.chat, target.msg, postHtml(it, TEXT_MAX), { parse_mode: "HTML" });
+      if (hasFile(it)) await api.editMessageCaption(target.chat, target.msg, { caption: postHtml(it, CAPTION_MAX, u), parse_mode: "HTML" });
+      else await api.editMessageText(target.chat, target.msg, postHtml(it, TEXT_MAX, u), { parse_mode: "HTML" });
       return { link: it.archive_link!, reposted: false };
     } catch (e: any) {
       if (String(e?.description ?? e).includes("not modified")) return { link: it.archive_link!, reposted: false };
       console.warn(`post for item ${it.id} not editable, publishing anew:`, e?.description ?? e);
     }
   }
-  const r = await publishToChannel(api, it, undefined);
+  const r = await publishToChannel(api, it, undefined, u);
   return { link: r.link, reposted: true };
 }
 
 // Transcript as a reply under the post; long ones as a .txt file. Re-runs edit the existing text reply.
-export async function postTranscript(api: Api, it: Item, postLink: string): Promise<string | undefined> {
+export async function postTranscript(api: Api, it: Item, postLink: string, u: User): Promise<string | undefined> {
+  const title = tr(u.lang).card.transcriptTitle;
   const text = it.raw_text?.trim();
   const post = parseLink(postLink);
   if (!text || !post) return;
   const old = it.raw_meta?.transcript_link ? parseLink(it.raw_meta.transcript_link) : undefined;
   if (old && old.chat === post.chat) {
     if (text.length <= TRANSCRIPT_INLINE_MAX) {
-      const ok = await api.editMessageText(old.chat, old.msg, `📜 Транскрипт\n\n${text}`).then(() => true, (e) => String(e?.description).includes("not modified"));
+      const ok = await api.editMessageText(old.chat, old.msg, `${title}\n\n${text}`).then(() => true, (e) => String(e?.description).includes("not modified"));
       if (ok) return it.raw_meta!.transcript_link;
     } else {
       return it.raw_meta!.transcript_link; // file already there
@@ -154,8 +156,8 @@ export async function postTranscript(api: Api, it: Item, postLink: string): Prom
   }
   const reply = { reply_parameters: { message_id: post.msg } };
   const m = text.length <= TRANSCRIPT_INLINE_MAX
-    ? await api.sendMessage(post.chat, `📜 Транскрипт\n\n${text}`, reply)
-    : await api.sendDocument(post.chat, new InputFile(Buffer.from(text, "utf8"), `transcript-${it.id}.txt`), { caption: "📜 Транскрипт", ...reply });
+    ? await api.sendMessage(post.chat, `${title}\n\n${text}`, reply)
+    : await api.sendDocument(post.chat, new InputFile(Buffer.from(text, "utf8"), `transcript-${it.id}.txt`), { caption: title, ...reply });
   return link(post.chat, m.message_id);
 }
 

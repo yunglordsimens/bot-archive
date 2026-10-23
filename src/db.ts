@@ -8,6 +8,7 @@ export const db = createClient(config.supabaseUrl, config.supabaseKey, {
 
 export type Item = {
   id: number;
+  user_id: number;
   created_at: string;
   input_kind: string;
   origin: string | null;
@@ -96,10 +97,11 @@ export async function claimItems(n: number): Promise<Item[]> {
   return (data ?? []) as Item[];
 }
 
-export async function findByTextHash(hash: string): Promise<Item | null> {
+export async function findByTextHash(userId: number, hash: string): Promise<Item | null> {
   const { data } = await db
     .from("items")
     .select()
+    .eq("user_id", userId)
     .eq("text_hash", hash)
     .in("status", ["ok", "pending_media", "queued", "processing"])
     .limit(1)
@@ -107,10 +109,11 @@ export async function findByTextHash(hash: string): Promise<Item | null> {
   return data as Item | null;
 }
 
-export async function findByHash(hash: string, excludeId: number): Promise<Item | null> {
+export async function findByHash(userId: number, hash: string, excludeId: number): Promise<Item | null> {
   const { data } = await db
     .from("items")
     .select()
+    .eq("user_id", userId)
     .eq("media_hash", hash)
     .eq("status", "ok")
     .neq("id", excludeId)

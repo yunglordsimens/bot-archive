@@ -1,46 +1,33 @@
-import { InlineKeyboard, Keyboard, type Api, type Bot, type Context } from "grammy";
-import { config, PROJECTS, THEMES, TYPES } from "./config.js";
+import { InlineKeyboard, Keyboard, type Api, type Bot } from "grammy";
+import { config, TYPE_EMOJI } from "./config.js";
 import { db, type Item } from "./db.js";
 import { archiveState } from "./archive.js";
-import { esc, listLine, plural } from "./format.js";
+import { esc, listLine, typeLabel } from "./format.js";
+import { allButtons, DICTS, LANGS, plural, tr, type Dict, type Lang } from "./i18n/index.js";
+import { addUser, listUsers, updateUser, userProjects, userThemes, type Ctx, type User } from "./users.js";
 
 const html = { parse_mode: "HTML" as const, link_preview_options: { is_disabled: true } };
 const SAVED = ["ok", "pending_media"];
+const TYPES = Object.keys(TYPE_EMOJI);
 const startedAt = new Date();
 
-export const BTN = { recent: "🕘 Последние", projects: "🧭 Направления", themes: "🗂 Темы", types: "🏷 Типы", status: "📊 Статус", help: "❓ Помощь" };
-const PROJECT_NAMES = Object.keys(PROJECTS);
-
-export const mainKeyboard = new Keyboard()
-  .text(BTN.recent).text(BTN.projects).text(BTN.themes).row()
-  .text(BTN.types).text(BTN.status).text(BTN.help)
+export const mainKeyboard = (d: Dict) => new Keyboard()
+  .text(d.btn.recent).text(d.btn.projects).text(d.btn.themes).row()
+  .text(d.btn.types).text(d.btn.status).text(d.btn.help)
   .resized().persistent();
 
-const HELP = `<b>Что кидать</b>
-🎵 тикток, ▶️ youtube, 📸 reels, 🔗 любую ссылку
-🖼 скрины — по одному или альбомом до 10
-🎙 голосовые, ⭕️ кружочки, 📝 текст, ↪️ пересланное
+// Every query is limited to the user's own items.
+const mine = (u: User) => db.from("items").select().eq("user_id", u.id).in("status", SAVED);
 
-<b>Что происходит</b>
-Бот отвечает «принято», потом строка меняется: ⬇️ скачиваю → 🧠 разбираю → итог.
-Итог: тип · заголовок · тема · → направление · 🗄 ссылка на сообщение в канале-архиве.
-Если Gemini перегружен — бот сам повторит через несколько минут. Если не вышло совсем — кнопка 🔁 Повторить или /retry.
-
-<b>Кнопки внизу</b>
-${BTN.recent} — 10 последних записей
-${BTN.projects} — записи по направлению (Lock in, OFST, UMPRUM…)
-${BTN.themes} / ${BTN.types} — записи по теме (о чём) или типу (что это)
-${BTN.status} — работает ли бот, канал, очередь, ошибки
-/retry — повторить все записи с ошибкой и без видео`;
-
-async function itemsList(title: string, filter: (q: any) => any, limit = 20) {
-  const { data } = await filter(db.from("items").select().in("status", SAVED)).order("id", { ascending: false }).limit(limit);
+async function itemsList(u: User, title: string, filter: (q: any) => any, limit = 20) {
+  const d = tr(u.lang);
+  const { data } = await filter(mine(u)).order("id", { ascending: false }).limit(limit);
   const items = (data ?? []) as Item[];
-  return `<b>${title}</b>\n${items.map(listLine).join("\n") || "пока пусто"}`;
+  return `<b>${title}</b>\n${items.map((it) => listLine(d, it)).join("\n") || d.ui.empty}`;
 }
 
-async function countBy(column: "theme" | "content_type" | "project") {
-  const { data } = await db.from("items").select(column).in("status", SAVED).limit(10000);
+async function countBy(u: User, column: "theme" | "content_type" | "project") {
+  const { data } = await db.from("items").select(column).eq("user_id", u.id).in("status", SAVED).limit(10000);
   const counts = new Map<string, number>();
   for (const r of (data ?? []) as Record<string, string | string[]>[]) {
     for (const v of [r[column]].flat()) counts.set(v, (counts.get(v) ?? 0) + 1);
@@ -48,167 +35,235 @@ async function countBy(column: "theme" | "content_type" | "project") {
   return counts;
 }
 
-async function projectsMenu() {
-  const counts = await countBy("project");
+async function projectsMenu(u: User) {
+  const counts = await countBy(u, "project");
   const kb = new InlineKeyboard();
-  PROJECT_NAMES.forEach((p, i) => {
+  Object.keys(userProjects(u)).forEach((p, i) => {
     kb.text(`${p} · ${counts.get(p) ?? 0}`, `pr:${i}`);
     if (i % 2) kb.row();
   });
   return kb;
 }
 
-async function themesMenu() {
-  const counts = await countBy("theme");
+async function themesMenu(u: User) {
+  const counts = await countBy(u, "theme");
   const kb = new InlineKeyboard();
-  THEMES.forEach((t, i) => kb.text(`${t} · ${counts.get(t) ?? 0}`, `th:${i}`).row());
+  userThemes(u).forEach((t, i) => kb.text(`${t} · ${counts.get(t) ?? 0}`, `th:${i}`).row());
   return kb;
 }
 
-async function typesMenu() {
-  const counts = await countBy("content_type");
+async function typesMenu(u: User) {
+  const d = tr(u.lang);
+  const counts = await countBy(u, "content_type");
   const kb = new InlineKeyboard();
-  Object.entries(TYPES).forEach(([k, v], i) => {
-    kb.text(`${v.emoji} ${v.ru} · ${counts.get(k) ?? 0}`, `ty:${k}`);
+  TYPES.forEach((k, i) => {
+    kb.text(`${typeLabel(d, k)} · ${counts.get(k) ?? 0}`, `ty:${k}`);
     if (i % 2) kb.row();
   });
   return kb;
 }
 
-function uptime() {
-  const min = Math.floor((Date.now() - startedAt.getTime()) / 60000);
-  const time = startedAt.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" });
-  return `с ${time} (${min >= 60 ? `${Math.floor(min / 60)} ч ` : ""}${min % 60} мин)`;
-}
-
-async function statusMessage(api: Api, botId: number) {
+async function statusMessage(api: Api, botId: number, u: User) {
+  const d = tr(u.lang);
   const statuses = ["ok", "pending_media", "queued", "processing", "failed"] as const;
   const counts = await Promise.all(statuses.map(async (s) => {
-    const { count } = await db.from("items").select("id", { count: "exact", head: true }).eq("status", s);
+    const { count } = await db.from("items").select("id", { count: "exact", head: true }).eq("user_id", u.id).eq("status", s);
     return count ?? 0;
   }));
   const c = Object.fromEntries(statuses.map((s, i) => [s, counts[i]])) as Record<(typeof statuses)[number], number>;
-  const archive = await archiveState(api, botId);
-  const { data: last } = await db.from("items").select("title, created_at").in("status", SAVED).order("id", { ascending: false }).limit(1).maybeSingle();
+  const archive = await archiveState(api, botId, u);
+  const { data: last } = await mine(u).order("id", { ascending: false }).limit(1).maybeSingle();
+  const min = Math.floor((Date.now() - startedAt.getTime()) / 60000);
+  const time = startedAt.toLocaleTimeString(d.locale, { hour: "2-digit", minute: "2-digit" });
 
   const lines = [
-    `<b>📊 Статус</b>`,
-    `🟢 бот работает ${uptime()}`,
-    archive.ok ? `🗄 канал-архив: ${esc(archive.title ?? "")} ✓` : `⚠️ канал-архив ${archive.problem}`,
-    `🧠 модель: ${config.geminiModel}`,
+    `<b>${d.ui.statusTitle}</b>`,
+    d.ui.running(time, Math.floor(min / 60), min % 60),
+    archive.ok ? d.ui.channelOk(esc(archive.title ?? "")) : d.ui.channelBad(archive.problem ?? ""),
+    `${d.ui.model}: ${config.geminiModel}`,
     ``,
-    `📦 сохранено: ${c.ok + c.pending_media}`,
-    c.queued || c.processing ? `⏳ в очереди: ${c.queued} · в работе: ${c.processing}` : `⏳ очередь пустая`,
+    `${d.ui.saved}: ${c.ok + c.pending_media}`,
+    c.queued || c.processing ? d.ui.queue(c.queued, c.processing) : d.ui.queueEmpty,
   ];
-  if (c.pending_media) lines.push(`🎞 без видео (повтор раз в сутки): ${c.pending_media}`);
-  if (c.failed) lines.push(`❌ с ошибкой: ${c.failed} — причина в карточке, повторить: /retry`);
-  if (last) lines.push(``, `🕘 последняя: ${esc(last.title ?? "")} · ${new Date(last.created_at).toLocaleString("ru-RU", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}`);
-
-  const kb = new InlineKeyboard().text("🔄 Обновить", "status");
-  if (c.failed + c.pending_media) kb.text(`🔁 Повторить (${c.failed + c.pending_media})`, "retryall");
+  if (c.pending_media) lines.push(`${d.ui.pending}: ${c.pending_media}`);
+  if (c.failed) lines.push(d.ui.failedN(c.failed));
+  if (last) {
+    const when = new Date(last.created_at).toLocaleString(d.locale, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+    lines.push(``, `${d.ui.last}: ${esc(last.title ?? "")} · ${when}`);
+  }
+  const kb = new InlineKeyboard().text(d.ui.refresh, "status");
+  if (c.failed + c.pending_media) kb.text(d.ui.retryN(c.failed + c.pending_media), "retryall");
   return { text: lines.join("\n"), kb };
 }
 
-// Back to the queue: given ids, or every failed + pending_media item.
-async function requeue(ids?: number[]) {
+// Back to the queue: given ids, or every failed + pending_media item of the user.
+async function requeue(u: User, ids?: number[]) {
   let q = db.from("items").update({ status: "queued", attempts: 0, next_retry_at: null, updated_at: new Date().toISOString() })
-    .in("status", ["failed", "pending_media"]);
+    .eq("user_id", u.id).in("status", ["failed", "pending_media"]);
   if (ids) q = q.in("id", ids);
   const { data, error } = await q.select("id");
   if (error) throw error;
   return data?.length ?? 0;
 }
 
-export function registerUi(bot: Bot) {
-  const showStatus = async (ctx: Context) => {
-    const s = await statusMessage(ctx.api, ctx.me.id);
+// Commands menu in the user's language, for this chat only.
+export async function setCommands(api: Api, u: User) {
+  const d = tr(u.lang);
+  await api.setMyCommands(Object.entries(d.commands).map(([command, description]) => ({ command, description })),
+    { scope: { type: "chat", chat_id: u.telegram_user_id } }).catch(() => {});
+}
+
+export function registerUi(bot: Bot<Ctx>) {
+  const showStatus = async (ctx: Ctx) => {
+    const s = await statusMessage(ctx.api, ctx.me.id, ctx.user);
     await ctx.reply(s.text, { ...html, reply_markup: s.kb });
   };
-  const showRecent = async (ctx: Context) => ctx.reply(await itemsList("🕘 Последние", (q) => q, 10), html);
-  const showThemes = async (ctx: Context) => ctx.reply("🗂 Темы — выбери:", { reply_markup: await themesMenu() });
-  const showTypes = async (ctx: Context) => ctx.reply("🏷 Типы — выбери:", { reply_markup: await typesMenu() });
-  const showProjects = async (ctx: Context) => ctx.reply("🧭 Направления — выбери:", { reply_markup: await projectsMenu() });
-  const retryAll = async (ctx: Context) => {
-    const n = await requeue();
-    await ctx.reply(n ? `🔁 ${plural(n, "запись", "записи", "записей")} снова в очереди` : "нечего повторять — ошибок нет");
+  const showRecent = async (ctx: Ctx) => ctx.reply(await itemsList(ctx.user, tr(ctx.user.lang).ui.recentTitle, (q) => q, 10), html);
+  const showThemes = async (ctx: Ctx) => ctx.reply(tr(ctx.user.lang).ui.chooseThemes, { reply_markup: await themesMenu(ctx.user) });
+  const showTypes = async (ctx: Ctx) => ctx.reply(tr(ctx.user.lang).ui.chooseTypes, { reply_markup: await typesMenu(ctx.user) });
+  const showProjects = async (ctx: Ctx) => ctx.reply(tr(ctx.user.lang).ui.chooseProjects, { reply_markup: await projectsMenu(ctx.user) });
+  const retryAll = async (ctx: Ctx) => {
+    const d = tr(ctx.user.lang);
+    const n = await requeue(ctx.user);
+    await ctx.reply(n ? d.ui.requeued(plural(d, n, d.forms.items)) : d.ui.nothingToRetry);
   };
-  const showHelp = (ctx: Context) => ctx.reply(HELP, { ...html, reply_markup: mainKeyboard });
+  const showHelp = (ctx: Ctx) => {
+    const d = tr(ctx.user.lang);
+    return ctx.reply(d.ui.help(d.btn), { ...html, reply_markup: mainKeyboard(d) });
+  };
 
-  bot.command("start", (ctx) =>
-    ctx.reply("Привет! Кидай сюда ссылки, скрины, голосовые, текст — разберу и сохраню.\nКнопки внизу 👇", { reply_markup: mainKeyboard }));
+  bot.command("start", async (ctx) => {
+    const d = tr(ctx.user.lang);
+    if (!ctx.user.name && ctx.from) ctx.user = await updateUser(ctx.user, { name: [ctx.from.first_name, ctx.from.username && `@${ctx.from.username}`].filter(Boolean).join(" ") });
+    await setCommands(ctx.api, ctx.user);
+    const noChannel = !(await archiveState(ctx.api, ctx.me.id, ctx.user)).ok;
+    await ctx.reply(`${d.ui.start}${noChannel ? `\n\n${d.ui.startNoChannel}` : ""}`, { reply_markup: mainKeyboard(d) });
+  });
   bot.command("help", showHelp);
   bot.command("status", showStatus);
   bot.command("recent", showRecent);
-  bot.hears(BTN.recent, showRecent);
-  bot.hears(BTN.themes, showThemes);
-  bot.hears(BTN.projects, showProjects);
   bot.command("retry", retryAll);
+  // Reply-keyboard buttons, in whatever language they were shown.
+  bot.hears(allButtons("recent"), showRecent);
+  bot.hears(allButtons("themes"), showThemes);
+  bot.hears(allButtons("projects"), showProjects);
+  bot.hears(allButtons("types"), showTypes);
+  bot.hears(allButtons("status"), showStatus);
+  bot.hears(allButtons("help"), showHelp);
+
   bot.command("project", async (ctx) => {
     const q = ctx.match.trim().toLowerCase();
-    const p = q && PROJECT_NAMES.find((x) => x.toLowerCase().startsWith(q) || x.toLowerCase().includes(q));
+    const p = q && Object.keys(userProjects(ctx.user)).find((x) => x.toLowerCase().startsWith(q) || x.toLowerCase().includes(q));
     if (!p) return showProjects(ctx);
-    await ctx.reply(await itemsList(`🧭 ${esc(p)}`, (b) => b.contains("project", [p])), html);
+    await ctx.reply(await itemsList(ctx.user, `🧭 ${esc(p)}`, (b) => b.contains("project", [p])), html);
   });
-  bot.hears(BTN.types, showTypes);
-  bot.hears(BTN.status, showStatus);
-  bot.hears(BTN.help, showHelp);
-
   bot.command("theme", async (ctx) => {
     const q = ctx.match.trim().toLowerCase();
-    const theme = q && (THEMES.find((t) => t.startsWith(q)) || THEMES.find((t) => t.includes(q)));
+    const themes = userThemes(ctx.user);
+    const theme = q && (themes.find((t) => t.startsWith(q)) || themes.find((t) => t.includes(q)));
     if (!theme) return showThemes(ctx);
-    await ctx.reply(await itemsList(esc(theme), (b) => b.eq("theme", theme)), html);
+    await ctx.reply(await itemsList(ctx.user, esc(theme), (b) => b.eq("theme", theme)), html);
   });
-
   bot.command("type", async (ctx) => {
+    const d = tr(ctx.user.lang);
     const q = ctx.match.trim().toLowerCase();
-    const type = q && Object.keys(TYPES).find((k) => k.startsWith(q) || TYPES[k].ru.startsWith(q));
+    const type = q && TYPES.find((k) => k.startsWith(q) || d.types[k as keyof Dict["types"]].startsWith(q));
     if (!type) return showTypes(ctx);
-    await ctx.reply(await itemsList(`${TYPES[type].emoji} ${TYPES[type].ru}`, (b) => b.eq("content_type", type)), html);
+    await ctx.reply(await itemsList(ctx.user, typeLabel(d, type), (b) => b.eq("content_type", type)), html);
   });
 
-  // Inline buttons: open a theme/type in place, with a "back" button.
-  bot.callbackQuery(/^th:(\d+)$/, async (ctx) => {
-    const theme = THEMES[Number(ctx.match[1])];
+  // Own life areas: /projects a, b, c (the last one is the "misc" bucket).
+  bot.command("projects", async (ctx) => {
+    const d = tr(ctx.user.lang);
+    const list = ctx.match.split(/[,\n]/).map((s) => s.trim()).filter(Boolean);
+    if (!list.length) return ctx.reply(d.projects.current(Object.keys(userProjects(ctx.user)).map((p) => `• ${p}`).join("\n")));
+    const old = userProjects(ctx.user);
+    const misc = d.defaultProjects.at(-1)!;
+    if (!list.includes(misc)) list.push(misc);
+    ctx.user = await updateUser(ctx.user, { projects: Object.fromEntries(list.map((p) => [p, old[p] ?? ""])) });
+    await ctx.reply(d.projects.set(list.map((p) => `• ${p}`).join("\n")));
+  });
+
+  // Interface language.
+  bot.command("lang", async (ctx) => {
+    const kb = new InlineKeyboard();
+    LANGS.forEach((l) => kb.text(`${DICTS[l].flag} ${DICTS[l].langName}`, `lang:${l}`));
+    await ctx.reply(tr(ctx.user.lang).lang.choose, { reply_markup: kb });
+  });
+  bot.callbackQuery(/^lang:(ru|cs|en|vi)$/, async (ctx) => {
+    ctx.user = await updateUser(ctx.user, { lang: ctx.match[1] as Lang });
+    const d = tr(ctx.user.lang);
     await ctx.answerCallbackQuery();
-    await ctx.editMessageText(await itemsList(`🗂 ${esc(theme)}`, (b) => b.eq("theme", theme)),
-      { ...html, reply_markup: new InlineKeyboard().text("← Темы", "themes") });
+    await setCommands(ctx.api, ctx.user);
+    await ctx.editMessageText(d.lang.set).catch(() => {});
+    await ctx.reply(d.ui.start, { reply_markup: mainKeyboard(d) });
+  });
+
+  // Admin: add users — only by Telegram id, only the owner/admins.
+  bot.command("adduser", async (ctx) => {
+    const d = tr(ctx.user.lang);
+    if (!ctx.user.is_admin) return;
+    const [id, lang] = ctx.match.trim().split(/\s+/);
+    if (!/^\d+$/.test(id ?? "")) return ctx.reply(d.admin.usage);
+    const l = (LANGS.includes(lang as Lang) ? lang : "cs") as Lang;
+    const u = await addUser(Number(id), l, ctx.user.id);
+    await ctx.reply(u ? d.admin.added(Number(id), l) : d.admin.exists);
+  });
+  bot.command("users", async (ctx) => {
+    if (!ctx.user.is_admin) return;
+    const users = await listUsers();
+    const rows = await Promise.all(users.map(async (u) => {
+      const { count } = await db.from("items").select("id", { count: "exact", head: true }).eq("user_id", u.id).in("status", SAVED);
+      return `• ${u.telegram_user_id} ${esc(u.name ?? "")} · ${DICTS[u.lang].flag} · ${count ?? 0}${u.archive_channel_id ? " · 🗄" : ""}${u.is_admin ? " · admin" : ""}`;
+    }));
+    await ctx.reply(`<b>${tr(ctx.user.lang).admin.list}</b>\n${rows.join("\n")}`, html);
+  });
+
+  // Inline buttons: open a theme/type/area in place, with a "back" button.
+  bot.callbackQuery(/^th:(\d+)$/, async (ctx) => {
+    const theme = userThemes(ctx.user)[Number(ctx.match[1])];
+    await ctx.answerCallbackQuery();
+    if (!theme) return;
+    await ctx.editMessageText(await itemsList(ctx.user, `🗂 ${esc(theme)}`, (b) => b.eq("theme", theme)),
+      { ...html, reply_markup: new InlineKeyboard().text(tr(ctx.user.lang).ui.backThemes, "themes") });
   });
   bot.callbackQuery(/^ty:(\w+)$/, async (ctx) => {
-    const t = TYPES[ctx.match[1]];
+    const d = tr(ctx.user.lang);
     await ctx.answerCallbackQuery();
-    await ctx.editMessageText(await itemsList(`${t.emoji} ${t.ru}`, (b) => b.eq("content_type", ctx.match[1])),
-      { ...html, reply_markup: new InlineKeyboard().text("← Типы", "types") });
+    await ctx.editMessageText(await itemsList(ctx.user, typeLabel(d, ctx.match[1]), (b) => b.eq("content_type", ctx.match[1])),
+      { ...html, reply_markup: new InlineKeyboard().text(d.ui.backTypes, "types") });
   });
   bot.callbackQuery(/^pr:(\d+)$/, async (ctx) => {
-    const p = PROJECT_NAMES[Number(ctx.match[1])];
+    const p = Object.keys(userProjects(ctx.user))[Number(ctx.match[1])];
     await ctx.answerCallbackQuery();
-    await ctx.editMessageText(await itemsList(`🧭 ${esc(p)}`, (b) => b.contains("project", [p])),
-      { ...html, reply_markup: new InlineKeyboard().text("← Направления", "projects") });
+    if (!p) return;
+    await ctx.editMessageText(await itemsList(ctx.user, `🧭 ${esc(p)}`, (b) => b.contains("project", [p])),
+      { ...html, reply_markup: new InlineKeyboard().text(tr(ctx.user.lang).ui.backProjects, "projects") });
   });
   bot.callbackQuery("projects", async (ctx) => {
     await ctx.answerCallbackQuery();
-    await ctx.editMessageText("🧭 Направления — выбери:", { reply_markup: await projectsMenu() });
+    await ctx.editMessageText(tr(ctx.user.lang).ui.chooseProjects, { reply_markup: await projectsMenu(ctx.user) });
   });
   bot.callbackQuery("themes", async (ctx) => {
     await ctx.answerCallbackQuery();
-    await ctx.editMessageText("🗂 Темы — выбери:", { reply_markup: await themesMenu() });
+    await ctx.editMessageText(tr(ctx.user.lang).ui.chooseThemes, { reply_markup: await themesMenu(ctx.user) });
   });
   bot.callbackQuery("types", async (ctx) => {
     await ctx.answerCallbackQuery();
-    await ctx.editMessageText("🏷 Типы — выбери:", { reply_markup: await typesMenu() });
+    await ctx.editMessageText(tr(ctx.user.lang).ui.chooseTypes, { reply_markup: await typesMenu(ctx.user) });
   });
 
   bot.callbackQuery("status", async (ctx) => {
-    const s = await statusMessage(ctx.api, ctx.me.id);
-    await ctx.answerCallbackQuery("обновлено");
+    const s = await statusMessage(ctx.api, ctx.me.id, ctx.user);
+    await ctx.answerCallbackQuery(tr(ctx.user.lang).ui.updated);
     await ctx.editMessageText(s.text, { ...html, reply_markup: s.kb }).catch(() => {});
   });
 
   bot.callbackQuery(/^retry:(\d+)$/, async (ctx) => {
-    const n = await requeue([Number(ctx.match[1])]);
-    await ctx.answerCallbackQuery(n ? "повторяю" : "уже не в ошибке");
-    if (n) await ctx.editMessageText("🔁 повторяю…").catch(() => {});
+    const d = tr(ctx.user.lang);
+    const n = await requeue(ctx.user, [Number(ctx.match[1])]);
+    await ctx.answerCallbackQuery(n ? d.ui.retryingShort : d.ui.notFailed);
+    if (n) await ctx.editMessageText(d.ui.retrying).catch(() => {});
   });
   bot.callbackQuery("retryall", async (ctx) => {
     await ctx.answerCallbackQuery();
