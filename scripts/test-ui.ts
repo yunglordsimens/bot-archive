@@ -14,7 +14,7 @@ const srv = createServer((req, res) => {
   if (req.method === "PATCH") return res.end(JSON.stringify([{ id: 2 }]));
   if (req.method === "HEAD") { res.setHeader("Content-Range", "0-0/1"); return res.end(); }
   const single = (req.headers.accept ?? "").includes("vnd.pgrst.object");
-  res.end(JSON.stringify(single ? rows[0] : rows));
+  res.end(JSON.stringify(single ? rows[0] : url.searchParams.get("limit") === "1" ? [rows[0]] : rows));
 });
 await new Promise<void>((r) => srv.listen(0, "127.0.0.1", r));
 Object.assign(process.env, {
@@ -74,4 +74,8 @@ assert.match(last().p.text, /Последние/);
 await bot.handleUpdate(msg("❓ Помощь"));
 assert.match(last().p.text, /Что кидать/);
 console.log("✓ recent + help");
+await bot.handleUpdate(msg("https://youtu.be/dQw4w9WgXcQ?si=1"));
+const dupMsgs = calls.filter((c) => /♻️/.test(c.p?.text ?? ""));
+assert.ok(dupMsgs.length >= 1);
+console.log("✓ repeat link → " + dupMsgs.at(-1)!.p.text.replace(/<[^>]+>/g, ""));
 srv.close();

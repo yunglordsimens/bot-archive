@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { Bot, type Context } from "grammy";
 import type { Message, MessageEntity } from "grammy/types";
 import { config, TG_FILE_LIMIT } from "./config.js";
@@ -6,6 +5,7 @@ import { db, findByTextHash, getSetting, insertItem, setSetting, type Item } fro
 import { acceptedText, duplicateText, esc, plural } from "./format.js";
 import { fetchTikTok } from "./fetchers.js";
 import { registerUi } from "./ui.js";
+import { textHash, urlHash } from "./dedup.js";
 
 const html = { parse_mode: "HTML" as const, link_preview_options: { is_disabled: true } };
 
@@ -15,20 +15,6 @@ function classifyUrl(url: string): { input_kind: string; origin: string } {
   if (/(^|\.)(youtube\.com|youtu\.be)$/.test(host)) return { input_kind: "link", origin: "youtube" };
   if (/(^|\.)instagram\.com$/.test(host)) return { input_kind: "link", origin: "instagram" };
   return { input_kind: "link", origin: "other" };
-}
-
-const TRACKING = /^(utm_\w+|si|_t|_r|igsh|igshid|is_from_webapp|sender_device|share_\w+|fbclid)$/;
-
-// sha256 of a normalized url (tracking params dropped) or text — for exact dedup.
-function textHash(s: string, isUrl: boolean) {
-  let norm = s.trim().toLowerCase().replace(/\s+/g, " ");
-  if (isUrl) {
-    const u = new URL(s.trim());
-    for (const k of [...u.searchParams.keys()]) if (TRACKING.test(k)) u.searchParams.delete(k);
-    u.hash = "";
-    norm = u.toString().replace(/\/$/, "");
-  }
-  return createHash("sha256").update(norm).digest("hex");
 }
 
 function extractUrls(text: string, entities: MessageEntity[] = []): string[] {
@@ -181,20 +167,31 @@ export function createBot() {
     const text = m.text ?? m.caption;
     if (!text) return;
     const urls = extractUrls(text, m.entities ?? m.caption_entities);
-    const dupReply = (d: Item) => ctx.reply(duplicateText(d), { ...html, reply_parameters: { message_id: m.message_id } });
+    // Repeat: log it as a 'duplicate' row (repeats feed the future "what you keep coming back to"), tell how many times.
+    const dupReply = async (d: Item, row: Partial<Item>) => {
+      const reply = await ctx.reply(duplicateText(d), { ...html, reply_parameters: { message_id: m.message_id } });
+      try {
+        await insertItem({ ...baseRow(m), ...row, status: "duplicate", duplicate_of: d.id, reply_message_id: reply.message_id } as Partial<Item>);
+        const { count } = await db.from("items").select("id", { count: "exact", head: true }).eq("duplicate_of", d.id);
+        if (count) await ctx.api.editMessageText(m.chat.id, reply.message_id, duplicateText(d, count + 1), html);
+      } catch (e) {
+        console.warn("duplicate log failed", e);
+      }
+    };
 
     if (!urls.length) {
-      const hash = textHash(text, false);
+      const hash = textHash(text);
       const dup = await findByTextHash(hash);
-      if (dup) return dupReply(dup);
-      return accept(ctx, { ...baseRow(m), input_kind: m.forward_origin ? "forwarded" : "text", text_hash: hash, input: { text } });
+      const row = { input_kind: m.forward_origin ? "forwarded" : "text", text_hash: hash, input: { text } };
+      if (dup) return dupReply(dup, row);
+      return accept(ctx, { ...baseRow(m), ...row });
     }
 
     for (const url of urls) {
-      const hash = textHash(url, true);
+      const hash = await urlHash(url);
       const dup = await findByTextHash(hash);
       if (dup) {
-        await dupReply(dup);
+        await dupReply(dup, { ...classifyUrl(url), source_url: url, text_hash: hash, input: { text } });
         continue;
       }
       await accept(ctx, { ...baseRow(m), ...classifyUrl(url), source_url: url, text_hash: hash, input: { text } });

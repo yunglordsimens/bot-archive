@@ -38,9 +38,12 @@ export function resultMessage(it: Item) {
   return msg;
 }
 
-export function duplicateText(it: Pick<Item, "title" | "summary" | "created_at">) {
-  const date = new Date(it.created_at).toLocaleDateString("ru-RU", { day: "numeric", month: "short", year: "numeric" });
-  return `♻️ уже есть: ${esc(it.title ?? it.summary ?? "")}, ${date}`;
+// times = how many times it has been sent in total (first save included).
+export function duplicateText(it: Pick<Item, "title" | "summary" | "created_at"> & { archive_link?: string | null }, times?: number) {
+  const date = new Date(it.created_at).toLocaleDateString("ru-RU", { day: "numeric", month: "short" });
+  const link = it.archive_link ? ` · <a href="${it.archive_link}">оригинал</a>` : "";
+  const nth = times && times > 2 ? ` · присылаешь уже ${times}-й раз` : "";
+  return `♻️ <b>повтор</b> — уже сохранено ${date}${nth}\n${esc(it.title ?? it.summary ?? "ещё разбирается…")}${link}`;
 }
 
 export function listLine(it: Item) {

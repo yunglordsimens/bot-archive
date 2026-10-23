@@ -136,7 +136,7 @@ async function finishReply(api: Api, it: Item) {
   } else if (it.status === "failed") {
     text = "⚠️ не получилось разобрать · ссылка сохранена";
   } else if (it.status === "duplicate") {
-    const { data } = await db.from("items").select("title, summary, created_at").eq("id", it.duplicate_of!).single();
+    const { data } = await db.from("items").select("title, summary, created_at, archive_link").eq("id", it.duplicate_of!).single();
     text = data ? duplicateText(data) : "♻️ уже есть";
   } else {
     text = resultMessage(it);
