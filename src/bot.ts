@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { Bot, type Context } from "grammy";
 import type { Message, MessageEntity } from "grammy/types";
 import { config, THEMES, TG_FILE_LIMIT, TYPES } from "./config.js";
-import { db, findByTextHash, insertItem, setSetting, type Item } from "./db.js";
+import { db, findByTextHash, getSetting, insertItem, setSetting, type Item } from "./db.js";
 import { acceptedText, duplicateText, esc, listLine, plural } from "./format.js";
 import { fetchTikTok } from "./fetchers.js";
 
@@ -101,13 +101,25 @@ async function flushAlbum(groupId: string) {
 export function createBot() {
   const bot = new Bot(config.botToken);
 
-  // Archive channel: remember it when the bot is made admin there.
+  // Archive channel: remember it when the owner makes the bot admin there.
+  // Confirmation goes to the owner's private chat with the bot; if that fails (no /start yet) — into the channel.
   bot.on("my_chat_member", async (ctx) => {
     const u = ctx.myChatMember;
     if (u.from.id !== config.ownerId || u.chat.type !== "channel") return;
-    if (u.new_chat_member.status === "administrator") {
+    const status = u.new_chat_member.status;
+    if (status === "administrator") {
       await setSetting("archive_channel_id", String(u.chat.id));
-      await ctx.api.sendMessage(config.ownerId, `🗄 канал-архив подключён: ${u.chat.title} (${u.chat.id})`);
+      const text = `🗄 канал-архив подключён: ${u.chat.title} (${u.chat.id})`;
+      console.log(text);
+      try {
+        await ctx.api.sendMessage(config.ownerId, text);
+      } catch (e) {
+        console.warn("owner DM failed (нажми /start в боте)", e);
+        await ctx.api.sendMessage(u.chat.id, `${text}\nНапиши боту /start в личке — туда будут приходить ответы.`);
+      }
+    } else if ((status === "left" || status === "kicked" || status === "member") && (await getSetting("archive_channel_id")) === String(u.chat.id)) {
+      await setSetting("archive_channel_id", "");
+      await ctx.api.sendMessage(config.ownerId, `⚠️ бот больше не админ в «${u.chat.title}» — канал-архив отключён`).catch(() => {});
     }
   });
 

@@ -67,11 +67,16 @@ export async function ytdlp(url: string, dir: string, opts: { video: boolean }):
   return { info, file: file && join(dir, file), subs: await readSubs(dir) };
 }
 
+// Docker: standalone binary updates itself. Homebrew install refuses -U → brew upgrade.
 export async function updateYtdlp() {
   try {
     await run("yt-dlp", ["-U"], { timeout: 120_000 });
-  } catch (e) {
-    console.warn("yt-dlp -U failed", e);
+  } catch {
+    try {
+      await run("brew", ["upgrade", "yt-dlp"], { timeout: 300_000 });
+    } catch (e) {
+      console.warn("yt-dlp update failed", e);
+    }
   }
 }
 

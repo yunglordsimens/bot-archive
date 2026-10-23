@@ -1,24 +1,77 @@
 # bot-archive
 
 Telegram-бот-архив (MVP): ссылка / скрин / голосовое → «принято» → Gemini достаёт суть → ответ редактируется на итог.
-Стек: Node 22 + grammY (long polling) · Supabase Postgres + pgvector · Gemini · yt-dlp + gallery-dl · Railway.
+Стек: Node 22 + grammY (long polling) · Supabase Postgres + pgvector · Gemini · yt-dlp + gallery-dl. Работает на Маке.
 
-## Деплой на Railway
-1. New Project → Deploy from GitHub → этот репозиторий (соберётся по `Dockerfile`).
-2. Variables — из `.env.example`:
-   - `BOT_TOKEN` — от @BotFather
-   - `OWNER_ID` — 585800070
-   - `SUPABASE_URL` — https://fjkjqkqzkjjuusonbyep.supabase.co
-   - `SUPABASE_SERVICE_ROLE_KEY` — Supabase → Project Settings → API Keys → `service_role` / secret
-   - `GEMINI_API_KEY` — Google AI Studio (с привязанной оплатой)
-3. Канал-архив: добавить бота админом в приватный канал → бот сам запомнит канал и напишет «канал-архив подключён». (Или задать `ARCHIVE_CHANNEL_ID`.)
-4. Шаг 0 — проверка TikTok с IP Railway: `/probe <10 ссылок через пробел>` → по каждой видно, какой путь сработал (yt-dlp / tikwm / gallery-dl / embed / oembed).
+Документы: `MVP.md` (что делает первая версия) и `SPEC.md` (полная спека на будущее).
 
-Схема БД — `supabase/migrations/` (обе применены к проекту). Имена полей — по SPEC.md §2; отличия, где решил MVP, описаны в `002_align_spec.sql`.
+## 1. Подготовка (один раз)
+
+1. `cp .env.example .env` → открыть `.env` и вписать `BOT_TOKEN`, `SUPABASE_SERVICE_ROLE_KEY`, `GEMINI_API_KEY`.
+   Остальное уже заполнено или имеет значения по умолчанию — описание каждой переменной в `.env.example`.
+2. Открыть бота в Telegram и нажать **/start**. Без этого бот не может написать тебе первым.
+
+Запускать **только один** вариант ниже. Два бота с одним токеном одновременно → ошибка `409 Conflict`.
+
+## 2а. Запуск через Docker Desktop (основной)
+
+Нужен [Docker Desktop](https://www.docker.com/products/docker-desktop/). В его настройках: General → **Start Docker Desktop when you sign in**.
+
+```bash
+cd bot-archive
+./scripts/start-docker-mac.sh
+```
+
+Скрипт собирает образ (Node + yt-dlp + gallery-dl), запускает бота в фоне и показывает логи, пока Мак держится бодрым.
+`Ctrl+C` закрывает логи и снимает запрет на сон; бот в контейнере продолжает работать, пока Мак не уснёт.
+
+Полезное:
+- логи: `docker compose logs -f`
+- перезапуск после изменений в коде или `.env`: `docker compose up -d --build`
+- остановить: `docker compose down`
+
+Контейнер с `restart: unless-stopped` сам поднимается после перезапуска Docker Desktop.
+
+## 2б. Запуск без Docker (Node + Homebrew)
+
+```bash
+brew install node yt-dlp gallery-dl ffmpeg
+cd bot-archive
+npm ci
+./scripts/start-mac.sh
+```
+
+Бот работает, пока открыто окно терминала. Остановить — `Ctrl+C`.
+yt-dlp обновляется сам раз в сутки (`brew upgrade yt-dlp`), когда есть ссылки, которые не скачались.
+
+## 3. Чтобы Мак не засыпал
+
+Оба скрипта запускают `caffeinate -ims`: Мак не уходит в сон, пока бот работает (экран при этом гаснуть может).
+- `-i` — запрет сна по бездействию, `-s` — запрет сна системы при питании от сети, `-m` — диск не засыпает.
+- **Крышку MacBook не закрывать**: с закрытой крышкой Мак засыпает всё равно (кроме режима с внешним монитором и питанием).
+- Надёжнее держать на зарядке. Дополнительно: Системные настройки → Аккумулятор → Параметры → «Предотвращать автоматический переход в режим сна при питании от сети, когда дисплей выключен».
+
+Пока Мак спит, бот не отвечает, но ничего не теряется: Telegram хранит сообщения до суток, бот заберёт их после пробуждения.
+
+## 4. Канал-архив
+
+1. Создать приватный канал → Управление каналом → Администраторы → Добавить администратора → найти бота → право **«Публикация сообщений»** включено → Сохранить.
+2. Бот (должен быть запущен) пишет **тебе в личку с ботом**: `🗄 канал-архив подключён: <название> (<id>)`.
+   - Если ты ещё не нажимала /start — это же сообщение появится **в самом канале** с просьбой нажать /start.
+   - Если бот был админом ещё до первого запуска (или прошло больше суток) — при старте он пишет `🗄 канал-архив не подключён…`. Тогда убрать бота из админов и добавить заново.
+3. При каждом запуске бот проверяет, что он всё ещё админ канала, и пишет в личку, если нет.
+
+## 5. Проверка TikTok (шаг 0)
+
+`/probe ссылка1 ссылка2 …` (10 тиктоков, из них 2–3 слайдшоу) → по каждой ссылке бот отвечает, какой путь сработал:
+`yt-dlp` / `tikwm` / `gallery-dl` / `embed` / `oembed` и что ответил каждый.
 
 ## Как устроено
-- `src/bot.ts` — приём, whitelist, альбомы (буфер 1,5 с → один ответ), команды `/recent` `/theme` `/type` `/probe`.
-- `src/worker.ts` — очередь в `items.status`: `queued → processing → ok | pending_media | failed | duplicate`; `pending_media` повторяется раз в сутки после `yt-dlp -U` (до 7 раз).
+
+- `src/bot.ts` — приём, whitelist, альбомы (буфер 1,5 с → один ответ), подключение канала-архива, команды `/recent` `/theme` `/type` `/probe`.
+- `src/worker.ts` — очередь в `items.status`: `queued → processing → ok | pending_media | failed | duplicate`; `pending_media` повторяется раз в сутки после обновления yt-dlp (до 7 раз).
 - `src/fetchers.ts` — TikTok: yt-dlp → TikWM → gallery-dl (слайдшоу) → embed → oEmbed; Reels через yt-dlp; YouTube-субтитры; текст страниц.
 - `src/gemini.ts` — единственная точка вызова модели (`GEMINI_MODEL` + `GEMINI_FALLBACK_MODELS`), JSON по схеме, эмбеддинг 1536.
 - `src/config.ts` — список тем и типов.
+- `supabase/migrations/` — схема БД (уже применена к проекту `bot-archive`). Имена полей — по SPEC.md §2; отличия, где решил MVP, описаны в `002_align_spec.sql`.
+- `scripts/test-archive-connect.ts` — офлайн-проверка подключения канала-архива: `npx tsx scripts/test-archive-connect.ts`.
