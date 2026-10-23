@@ -1,33 +1,27 @@
 import { createBot, dbErrorHint } from "./bot.js";
 import { db } from "./db.js";
 import { startWorker } from "./worker.js";
-import { archiveChannel } from "./archive.js";
+import { archiveState } from "./archive.js";
 import { config } from "./config.js";
 
 const bot = createBot();
 
 await bot.api.setMyCommands([
+  { command: "start", description: "показать кнопки" },
+  { command: "status", description: "состояние бота, канала и очереди" },
   { command: "recent", description: "последние 10 записей" },
-  { command: "theme", description: "записи темы" },
-  { command: "type", description: "записи типа (tip, recipe…)" },
+  { command: "theme", description: "записи по теме" },
+  { command: "type", description: "записи по типу" },
+  { command: "help", description: "как пользоваться" },
   { command: "probe", description: "проверить скачивание тиктоков" },
 ]);
 
 // Remind the owner if the archive channel isn't connected (or the bot lost admin rights).
 async function checkArchive() {
-  const ch = await archiveChannel();
-  let problem = "не подключён: добавь бота админом в приватный канал-архив";
-  if (ch) {
-    try {
-      const me = await bot.api.getChatMember(ch, bot.botInfo.id);
-      if (me.status === "administrator" && me.can_post_messages) return console.log(`archive channel ${ch} ok`);
-      problem = "бот там не админ или не может публиковать — проверь права";
-    } catch {
-      problem = "недоступен — добавь бота админом заново";
-    }
-  }
-  console.warn(`archive channel: ${problem}`);
-  await bot.api.sendMessage(config.ownerId, `🗄 канал-архив ${problem}`).catch(() => {});
+  const a = await archiveState(bot.api, bot.botInfo.id);
+  if (a.ok) return console.log(`archive channel ok: ${a.title}`);
+  console.warn(`archive channel ${a.problem}`);
+  await bot.api.sendMessage(config.ownerId, `🗄 канал-архив ${a.problem}`).catch(() => {});
 }
 
 await bot.init();

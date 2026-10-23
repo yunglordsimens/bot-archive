@@ -1,12 +1,12 @@
 import { createHash } from "node:crypto";
-import type { Api } from "grammy";
+import { InlineKeyboard, type Api } from "grammy";
 import type { Part } from "@google/genai";
 import { config } from "./config.js";
 import { claimItems, db, findByHash, updateItem, type Item } from "./db.js";
 import { analyze, embed, mediaPart, sleep, textPart, urlPart, type Analysis } from "./gemini.js";
 import { fetchTikTok, fetchVideoGeneric, fetchWebPage, fetchYouTubeText, updateYtdlp, type Fetched } from "./fetchers.js";
 import { archiveCopy, archiveUpload } from "./archive.js";
-import { batchMessage, duplicateText, resultMessage } from "./format.js";
+import { batchMessage, duplicateText, resultMessage, sourceLabel } from "./format.js";
 
 const DAY = 24 * 3600 * 1000;
 const MAX_MEDIA_RETRIES = 7;
@@ -42,11 +42,18 @@ async function safeArchive(fn: () => Promise<{ fileIds: string[]; link?: string 
   }
 }
 
+// Status line on the "принято" message while the item is being processed.
+async function stage(api: Api, it: Item, text: string) {
+  if (!it.reply_message_id || it.batch_id) return;
+  await api.editMessageText(it.tg_chat_id, it.reply_message_id, `${sourceLabel(it.input_kind, it.origin)} · ${text}`).catch(() => {});
+}
+
 async function processVideoLink(api: Api, it: Item, f: Fetched): Promise<Result> {
   const parts: Part[] = [textPart(contextText(it, { "Подпись автора": f.caption, "Автор": f.author, "Субтитры автора": f.subtitles }))];
   if (f.video) parts.push(await mediaPart(f.video.buf, f.video.mime));
   for (const img of f.images ?? []) parts.push(await mediaPart(img.buf, img.mime));
   const hasMedia = !!(f.video || f.images?.length);
+  await stage(api, it, hasMedia ? `🧠 разбираю ${f.images?.length ? "картинки" : "видео"}…` : "🧠 видео не скачалось, разбираю подпись…");
   if (!hasMedia) parts.push(textPart("Видео не удалось скачать — опирайся только на подпись и автора."));
 
   const analysis = await analyze(parts);
@@ -127,7 +134,7 @@ async function finishReply(api: Api, it: Item) {
     if (batch.some((b) => b.status === "queued" || b.status === "processing")) return;
     text = batchMessage(batch);
   } else if (it.status === "failed") {
-    text = "⚠️ не получилось разобрать · сохранено, ссылка не потеряется";
+    text = "⚠️ не получилось разобрать · ссылка сохранена";
   } else if (it.status === "duplicate") {
     const { data } = await db.from("items").select("title, summary, created_at").eq("id", it.duplicate_of!).single();
     text = data ? duplicateText(data) : "♻️ уже есть";
@@ -135,13 +142,19 @@ async function finishReply(api: Api, it: Item) {
     text = resultMessage(it);
   }
   try {
-    await api.editMessageText(it.tg_chat_id, it.reply_message_id, text, { parse_mode: "HTML", link_preview_options: { is_disabled: true } });
+    const retry = !it.batch_id && (it.status === "failed" || it.status === "pending_media");
+    await api.editMessageText(it.tg_chat_id, it.reply_message_id, text, {
+      parse_mode: "HTML", link_preview_options: { is_disabled: true },
+      ...(retry ? { reply_markup: new InlineKeyboard().text("🔁 Повторить", `retry:${it.id}`) } : {}),
+    });
   } catch (e: any) {
     if (!String(e?.description ?? e).includes("not modified")) console.warn("edit reply failed", e);
   }
 }
 
 async function handle(api: Api, it: Item) {
+  const downloads = it.input_kind === "tiktok" || it.origin === "instagram";
+  await stage(api, it, downloads ? "⬇️ скачиваю…" : it.input_kind === "link" ? "🔎 читаю…" : "🧠 разбираю…");
   try {
     const r = await processItem(api, it);
     const a = r.analysis;

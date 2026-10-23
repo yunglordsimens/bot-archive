@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
 import { Bot, type Context } from "grammy";
 import type { Message, MessageEntity } from "grammy/types";
-import { config, THEMES, TG_FILE_LIMIT, TYPES } from "./config.js";
+import { config, TG_FILE_LIMIT } from "./config.js";
 import { db, findByTextHash, getSetting, insertItem, setSetting, type Item } from "./db.js";
-import { acceptedText, duplicateText, esc, listLine, plural } from "./format.js";
+import { acceptedText, duplicateText, esc, plural } from "./format.js";
 import { fetchTikTok } from "./fetchers.js";
+import { registerUi } from "./ui.js";
 
 const html = { parse_mode: "HTML" as const, link_preview_options: { is_disabled: true } };
 
@@ -139,29 +140,7 @@ export function createBot() {
     if (ctx.from?.id === config.ownerId && ctx.chat?.type === "private") await next();
   });
 
-  bot.command("start", (ctx) =>
-    ctx.reply("Кидай ссылки, скрины, голосовые, текст — разберу и сохраню.\n/recent · /theme &lt;тема&gt; · /type &lt;тип&gt;", html));
-
-  bot.command("recent", async (ctx) => {
-    const { data } = await db.from("items").select().in("status", ["ok", "pending_media"]).order("id", { ascending: false }).limit(10);
-    await ctx.reply(data?.length ? (data as Item[]).map(listLine).join("\n") : "пока пусто", html);
-  });
-
-  bot.command("theme", async (ctx) => {
-    const q = ctx.match.trim().toLowerCase();
-    const theme = q && THEMES.find((t) => t.startsWith(q)) || THEMES.find((t) => q && t.includes(q));
-    if (!theme) return ctx.reply(`Темы:\n${THEMES.map((t) => `• ${t}`).join("\n")}`);
-    const { data } = await db.from("items").select().eq("theme", theme).in("status", ["ok", "pending_media"]).order("id", { ascending: false }).limit(20);
-    await ctx.reply(`<b>${esc(theme)}</b>\n${(data as Item[] ?? []).map(listLine).join("\n") || "пусто"}`, html);
-  });
-
-  bot.command("type", async (ctx) => {
-    const q = ctx.match.trim().toLowerCase();
-    const type = Object.keys(TYPES).find((k) => q && (k.startsWith(q) || TYPES[k].ru.startsWith(q)));
-    if (!type) return ctx.reply(`Типы: ${Object.entries(TYPES).map(([k, v]) => `${k} (${v.ru})`).join(", ")}`);
-    const { data } = await db.from("items").select().eq("content_type", type).in("status", ["ok", "pending_media"]).order("id", { ascending: false }).limit(20);
-    await ctx.reply(`<b>${TYPES[type].emoji} ${TYPES[type].ru}</b>\n${(data as Item[] ?? []).map(listLine).join("\n") || "пусто"}`, html);
-  });
+  registerUi(bot);
 
   // Diagnostics for the TikTok download chain: /probe <links…>
   bot.command("probe", async (ctx) => {

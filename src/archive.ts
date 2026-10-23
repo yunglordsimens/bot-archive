@@ -11,6 +11,20 @@ export async function archiveChannel(): Promise<number | undefined> {
   return v ? Number(v) : config.archiveChannelId;
 }
 
+// Is the archive channel usable? Used at startup and in the status screen.
+export async function archiveState(api: Api, botId: number): Promise<{ ok: boolean; title?: string; problem?: string }> {
+  const ch = await archiveChannel();
+  if (!ch) return { ok: false, problem: "не подключён: добавь бота админом в приватный канал" };
+  try {
+    const me = await api.getChatMember(ch, botId);
+    if (me.status !== "administrator" || !me.can_post_messages) return { ok: false, problem: "— бот там не админ или не может публиковать" };
+    const chat = await api.getChat(ch);
+    return { ok: true, title: "title" in chat ? chat.title : String(ch) };
+  } catch {
+    return { ok: false, problem: "недоступен — удали бота из админов канала и добавь заново" };
+  }
+}
+
 function link(channelId: number, messageId: number) {
   return `https://t.me/c/${String(channelId).replace(/^-100/, "")}/${messageId}`;
 }
