@@ -48,10 +48,12 @@ export function renderCard(it: Item, mode: Mode): { text: string; kb: InlineKeyb
   let text = short;
   if (mode === "full") {
     const tags = it.tags?.length ? `\n\n${it.tags.map((t) => `#${t.replace(/\s+/g, "_")}`).join(" ")}` : "";
-    text = `<b>${resultMessage(it)}</b>${similar}\n\n${esc(it.summary ?? "")}${details(it.structured, false)}${tags}`;
+    const why = it.why_me ? `\n\n💭 <b>Зачем мне:</b> ${esc(it.why_me)}` : "";
+    text = `<b>${resultMessage(it)}</b>${similar}\n\n${esc(it.summary ?? "")}${why}${details(it.structured, false)}${tags}`;
   } else if (mode === "en" && it.raw_meta?.en) {
     const en = it.raw_meta.en;
-    text = `<b>🇬🇧 ${esc(en.title)}</b>\n\n${esc(en.summary)}${details(en.structured, true)}`;
+    const why = en.why_me ? `\n\n💭 <b>Why me:</b> ${esc(en.why_me)}` : "";
+    text = `<b>🇬🇧 ${esc(en.title)}</b>\n\n${esc(en.summary)}${why}${details(en.structured, true)}`;
   }
   // Telegram limit is 4096; long lists fall back to the short card + a hint.
   if (text.length > 4000) text = `${short}\n\n${esc(cut(it.summary ?? "", 1500))}\n\n<i>(всё целиком — в «Транскрипт»)</i>`;
@@ -79,7 +81,7 @@ export function registerCard(bot: Bot) {
     if (!it) return ctx.answerCallbackQuery("запись не найдена");
     if (!it.raw_meta?.en) {
       await ctx.answerCallbackQuery("перевожу…");
-      const en = await translateCard({ title: it.title ?? "", summary: it.summary ?? "", structured: it.structured ?? {} });
+      const en = await translateCard({ title: it.title ?? "", summary: it.summary ?? "", structured: it.structured ?? {}, why_me: it.why_me ?? undefined });
       it.raw_meta = { ...it.raw_meta, en };
       await updateItem(it.id, { raw_meta: it.raw_meta });
     } else {

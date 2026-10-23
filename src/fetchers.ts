@@ -291,11 +291,22 @@ export async function fetchVideoGeneric(url: string): Promise<Fetched> {
 
 // Metadata only (no download, no subs) — for counters of links that skip yt-dlp otherwise (YouTube goes to Gemini directly).
 export async function fetchStats(url: string): Promise<Stats | undefined> {
+  return (await fetchMeta(url))?.stats;
+}
+
+// Author, caption and counters without downloading the video; TikTok falls back to oEmbed for the author.
+export async function fetchMeta(url: string): Promise<{ author?: string; caption?: string; stats?: Stats } | undefined> {
   try {
     const { stdout } = await run("yt-dlp", ["--no-warnings", "--no-playlist", "-j", "--skip-download", url], { timeout: 60_000, maxBuffer: 50 * 1024 * 1024 });
-    return statsFromYt(JSON.parse(stdout.trim().split("\n").pop()!) as YtInfo);
+    const info = JSON.parse(stdout.trim().split("\n").pop()!) as YtInfo;
+    return { author: info.uploader || info.creator || info.channel, caption: info.description || info.title, stats: statsFromYt(info) };
   } catch (e) {
-    console.warn("stats failed", errMsg(e));
+    console.warn("metadata failed", errMsg(e));
+  }
+  if (/tiktok\.com/.test(url)) {
+    try {
+      return await oembed((await resolveTikTok(url)).url);
+    } catch {}
   }
 }
 

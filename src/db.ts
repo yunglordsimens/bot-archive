@@ -32,6 +32,8 @@ export type Item = {
   kind: string | null;
   theme: string | null;
   project: string[];
+  why_me: string | null;
+  next_retry_at?: string | null;
   tags: string[];
   structured: Structured | null;
   raw_text: string | null;
@@ -51,9 +53,14 @@ export type ItemInput = {
 export type NamedList = { title: string; items: string[] };
 export type Structured = { points?: string[]; ingredients?: string[]; steps?: string[]; lists?: NamedList[] };
 export type Similar = { id: number; summary: string | null; title: string | null; created_at: string; similarity: number };
-export type RawMeta = { via?: string; log?: string[]; archive_error?: string; similar?: Similar; en?: CardText; stats?: Stats };
+export type RawMeta = {
+  via?: string; log?: string[]; archive_error?: string; similar?: Similar; en?: CardText; stats?: Stats;
+  v?: number;                 // 2 = processed with the current format (project, why_me, EN, channel post)
+  transcript_link?: string;   // transcript reply under the channel post
+  reprocess_log?: string[];
+};
 // Card content in one language — used for the English translation.
-export type CardText = { title: string; summary: string; structured: Structured };
+export type CardText = { title: string; summary: string; structured: Structured; why_me?: string };
 
 export async function insertItem(row: Partial<Item>): Promise<Item> {
   const { data, error } = await db.from("items").insert(row).select().single();

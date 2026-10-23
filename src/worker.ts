@@ -2,26 +2,26 @@ import { createHash } from "node:crypto";
 import { InlineKeyboard, type Api } from "grammy";
 import type { Part } from "@google/genai";
 import { config } from "./config.js";
-import { claimItems, db, findByHash, updateItem, type Item, type Similar } from "./db.js";
-import { analyze, embed, mediaPart, sleep, textPart, urlPart, type Analysis } from "./gemini.js";
+import { claimItems, db, findByHash, updateItem, type Item, type RawMeta, type Similar } from "./db.js";
+import { analyze, embed, mediaPart, sleep, textPart, translateCard, urlPart, type Analysis } from "./gemini.js";
 import { fetchStats, fetchTikTok, fetchVideoGeneric, fetchWebPage, fetchYouTubeText, updateYtdlp, type Fetched } from "./fetchers.js";
-import { archiveCopy, archivePost, archiveUpload } from "./archive.js";
-import { batchMessage, duplicateText, esc, failedText, sourceLabel } from "./format.js";
+import { postTranscript, publishToChannel, type Publish } from "./channel.js";
+import { batchMessage, duplicateText, failedText, sourceLabel } from "./format.js";
 import { renderCard } from "./card.js";
 
 const DAY = 24 * 3600 * 1000;
 const MAX_MEDIA_RETRIES = 7;
 
-type Result = { analysis: Analysis; patch: Record<string, unknown>; status: "ok" | "pending_media" | "duplicate" };
+type Result = { analysis: Analysis; patch: Record<string, unknown>; status: "ok" | "pending_media" | "duplicate"; publish?: Publish };
 
-async function tgDownload(api: Api, fileId: string): Promise<Buffer> {
+export async function tgDownload(api: Api, fileId: string): Promise<Buffer> {
   const f = await api.getFile(fileId);
   const res = await fetch(`https://api.telegram.org/file/bot${config.botToken}/${f.file_path}`);
   if (!res.ok) throw new Error(`tg file HTTP ${res.status}`);
   return Buffer.from(await res.arrayBuffer());
 }
 
-function contextText(it: Item, extra: Record<string, string | undefined> = {}) {
+export function contextText(it: Item, extra: Record<string, string | undefined> = {}) {
   const lines = Object.entries({
     "Источник": it.origin && it.origin !== "telegram" ? it.origin : it.input_kind,
     "Ссылка": it.source_url ?? undefined,
@@ -60,16 +60,9 @@ async function processVideoLink(api: Api, it: Item, f: Fetched): Promise<Result>
   const analysis = await analyze(parts);
   const patch: Record<string, unknown> = { caption: f.caption, author: f.author, raw_meta: { via: f.via, log: f.log, stats: f.stats } };
   if (!it.occurred_at && f.date) patch.occurred_at = f.date;
-  if (hasMedia) {
-    const a = await safeArchive(() => archiveUpload(api, f, `${it.source_url}\n${analysis.title}`), patch);
-    patch.archive_file_ids = a.fileIds;
-    patch.tg_file_id = a.fileIds[0];
-    patch.archive_link = a.link;
-    patch.next_retry_at = null;
-  } else {
-    patch.next_retry_at = it.attempts < MAX_MEDIA_RETRIES ? new Date(Date.now() + DAY).toISOString() : null;
-  }
-  return { analysis, patch, status: hasMedia ? "ok" : "pending_media" };
+  if (hasMedia) patch.next_retry_at = null;
+  else patch.next_retry_at = it.attempts < MAX_MEDIA_RETRIES ? new Date(Date.now() + DAY).toISOString() : null;
+  return { analysis, patch, status: hasMedia ? "ok" : "pending_media", publish: hasMedia ? { kind: "upload", video: f.video, images: f.images } : undefined };
 }
 
 async function processItem(api: Api, it: Item): Promise<Result> {
@@ -121,8 +114,7 @@ async function processItem(api: Api, it: Item): Promise<Result> {
       const parts: Part[] = [textPart(contextText(it, { "Подпись": it.input.text }))];
       parts.push(await mediaPart(buf, it.input.mime ?? "application/octet-stream"));
       const analysis = await analyze(parts);
-      const link = (await safeArchive(async () => ({ fileIds: [], link: await archiveCopy(api, it.tg_chat_id, it.tg_message_id) }), {})).link;
-      return { analysis, status: "ok", patch: { media_hash: hash, archive_file_ids: [it.input.file_id], archive_link: link } };
+      return { analysis, status: "ok", patch: { media_hash: hash, archive_file_ids: [it.input.file_id] }, publish: { kind: "copy" } };
     }
   }
 }
@@ -158,11 +150,41 @@ async function finishReply(api: Api, it: Item) {
 }
 
 // Closest saved item by meaning; only returned when it's really close (SIMILAR_THRESHOLD).
-async function nearest(embedding: string, id: number): Promise<Similar | undefined> {
+export async function nearest(embedding: string, id: number): Promise<Similar | undefined> {
   const { data, error } = await db.rpc("nearest_item", { query: embedding, exclude: id });
   if (error) return void console.warn("nearest_item failed", error);
   const top = (data as Similar[] | null)?.[0];
   return top && top.similarity > config.similarThreshold ? top : undefined;
+}
+
+// Analysis → item fields, embedding, "похоже на", EN translation (for the channel post and the EN button).
+export async function applyAnalysis(it: Item, a: Analysis, patch: Record<string, unknown>) {
+  Object.assign(patch, {
+    title: a.title, summary: a.summary, content_type: a.content_type, kind: a.kind, why_me: a.why_me,
+    theme: a.theme, project: a.project, tags: a.tags, structured: a.structured, raw_text: a.raw_text, language: a.language, error: null,
+    embedding: JSON.stringify(await embed(`${a.title}\n${a.summary}\n${a.raw_text}`)),
+  });
+  const meta: RawMeta = { ...it.raw_meta, ...(patch.raw_meta as RawMeta), v: 2 };
+  const similar = await nearest(patch.embedding as string, it.id);
+  if (similar) meta.similar = similar;
+  try {
+    meta.en = await translateCard({ title: a.title, summary: a.summary, structured: a.structured, why_me: a.why_me });
+  } catch (e) {
+    console.warn(`translation failed for ${it.id}`, e);
+    delete meta.en;
+  }
+  patch.raw_meta = meta;
+}
+
+// Every item gets a post in the archive channel (new format) + transcript reply under it.
+async function publishItem(api: Api, it: Item, patch: Record<string, unknown>, pub: Publish) {
+  const full = { ...it, ...patch } as Item;
+  const posted = await safeArchive(() => publishToChannel(api, full, pub), patch);
+  if (!posted.link) return;
+  patch.archive_link = posted.link;
+  if (posted.fileIds.length) Object.assign(patch, { archive_file_ids: posted.fileIds, tg_file_id: posted.fileIds[0] });
+  const transcript = await postTranscript(api, { ...full, archive_link: posted.link }, posted.link).catch((e) => void console.warn("transcript post failed", e));
+  if (transcript) patch.raw_meta = { ...(patch.raw_meta as RawMeta), transcript_link: transcript };
 }
 
 const MAX_TRANSIENT_ATTEMPTS = 4;
@@ -177,21 +199,8 @@ async function handle(api: Api, it: Item) {
     const a = r.analysis;
     const patch: Record<string, unknown> = { ...r.patch, status: r.status };
     if (r.status !== "duplicate") {
-      Object.assign(patch, {
-        title: a.title, summary: a.summary, content_type: a.content_type, kind: a.kind,
-        theme: a.theme, project: a.project, tags: a.tags, structured: a.structured, raw_text: a.raw_text, language: a.language, error: null,
-        embedding: JSON.stringify(await embed(`${a.title}\n${a.summary}\n${a.raw_text}`)),
-      });
-      const similar = await nearest(patch.embedding as string, it.id);
-      if (similar) patch.raw_meta = { ...(patch.raw_meta as object), similar };
-      // Every card links to a message in the archive channel: items without a file get a text post there.
-      if (!patch.archive_link) {
-        const isText = it.input_kind === "text" || it.input_kind === "forwarded";
-        const post = isText
-          ? async () => ({ fileIds: [], link: await archiveCopy(api, it.tg_chat_id, it.tg_message_id) })
-          : () => archivePost(api, `<b>${esc(a.title)}</b>\n${esc(it.source_url ?? "")}\n\n${esc(a.summary)}`);
-        patch.archive_link = (await safeArchive(post, patch)).link;
-      }
+      await applyAnalysis(it, a, patch);
+      await publishItem(api, it, patch, r.publish);
     }
     await updateItem(it.id, patch);
     Object.assign(it, patch);

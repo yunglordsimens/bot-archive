@@ -11,6 +11,7 @@ export type Analysis = {
   kind: string;
   theme: string;
   project: string[];
+  why_me: string;
   tags: string[];
   structured: Structured;
   raw_text: string;
@@ -25,6 +26,7 @@ const schema = {
     content_type: { type: Type.STRING, enum: Object.keys(TYPES) },
     kind: { type: Type.STRING, description: "Что это по форме: видео, мем, твит, заметка, чек, скрин переписки, статья, голосовое…" },
     theme: { type: Type.STRING, enum: THEMES },
+    why_me: { type: Type.STRING, description: "Зачем это мне: 1–2 предложения, как пригодится в моих направлениях. Конкретно, без общих слов" },
     project: { type: Type.ARRAY, items: { type: Type.STRING, enum: Object.keys(PROJECTS) }, description: "Направления жизни, к которым относится запись; 1–3" },
     tags: { type: Type.ARRAY, items: { type: Type.STRING }, description: "3–7 свободных тегов, строчными, по-русски" },
     structured: {
@@ -50,7 +52,7 @@ const schema = {
     raw_text: { type: Type.STRING, description: "Дословно: что говорят и что написано на экране/картинке, на языке оригинала" },
     language: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Языки в контенте, ISO-коды: ru, uk, cs, en…" },
   },
-  required: ["title", "summary", "content_type", "kind", "theme", "project", "tags", "structured", "raw_text", "language"],
+  required: ["title", "summary", "content_type", "kind", "theme", "project", "why_me", "tags", "structured", "raw_text", "language"],
 };
 
 const SYSTEM = `Ты разбираешь сохранённый контент для личного архива. Вход может быть видео (со звуком), картинкой, аудио, текстом или страницей.
@@ -67,6 +69,7 @@ const SYSTEM = `Ты разбираешь сохранённый контент 
   · project — К КАКОМУ НАПРАВЛЕНИЮ ЖИЗНИ пользователя относится: можно несколько (обычно 1–2), строго из списка; если ни к одному — «разное».
   Направления пользователя:
 ${Object.entries(PROJECTS).map(([k, v]) => `  · ${k}${v ? ` — ${v}` : ""}`).join("\n")}
+- why_me — «зачем мне»: как это пригодится пользователю в его направлениях, 1–2 предложения, конкретно (что сделать, где применить). Если это просто для настроения — так и скажи.
 - Ничего не выдумывай: если данных мало (например, только подпись), так и скажи в summary.`;
 
 export function textPart(text: string): Part {
@@ -129,6 +132,7 @@ function validate(raw: string): Analysis {
   a.tags = (a.tags ?? []).map((t) => t.toLowerCase().trim()).filter(Boolean);
   a.structured ??= {};
   a.raw_text ??= "";
+  a.why_me ??= "";
   a.language ??= [];
   return a;
 }
@@ -149,6 +153,7 @@ const cardSchema = {
   properties: {
     title: { type: Type.STRING },
     summary: { type: Type.STRING },
+    why_me: { type: Type.STRING },
     structured: {
       type: Type.OBJECT,
       properties: {

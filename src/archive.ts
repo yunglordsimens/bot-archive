@@ -25,24 +25,8 @@ export async function archiveState(api: Api, botId: number): Promise<{ ok: boole
   }
 }
 
-function link(channelId: number, messageId: number) {
+export function link(channelId: number, messageId: number) {
   return `https://t.me/c/${String(channelId).replace(/^-100/, "")}/${messageId}`;
-}
-
-// Items without a file (links, YouTube, pages, videos that didn't download): post a text card to the channel.
-export async function archivePost(api: Api, html: string): Promise<{ fileIds: string[]; link?: string }> {
-  const ch = await archiveChannel();
-  if (!ch) return { fileIds: [] };
-  const m = await api.sendMessage(ch, html.slice(0, 4000), { parse_mode: "HTML" });
-  return { fileIds: [], link: link(ch, m.message_id) };
-}
-
-// Original is already in Telegram — copy it to the channel.
-export async function archiveCopy(api: Api, chatId: number, messageId: number): Promise<string | undefined> {
-  const ch = await archiveChannel();
-  if (!ch) return;
-  const m = await api.copyMessage(ch, chatId, messageId);
-  return link(ch, m.message_id);
 }
 
 // Downloaded media (TikTok etc.) — upload to the channel, return file_ids + link.
@@ -53,10 +37,9 @@ export async function archiveUpload(
 ): Promise<{ fileIds: string[]; link?: string }> {
   const ch = await archiveChannel();
   if (!ch) return { fileIds: [] };
-  caption = caption.slice(0, 1000);
 
   if (media.video && media.video.buf.length < BOT_UPLOAD_LIMIT) {
-    const m = await api.sendVideo(ch, new InputFile(media.video.buf, "video.mp4"), { caption, supports_streaming: true });
+    const m = await api.sendVideo(ch, new InputFile(media.video.buf, "video.mp4"), { caption, parse_mode: "HTML", supports_streaming: true });
     return { fileIds: [m.video.file_id], link: link(ch, m.message_id) };
   }
   if (media.images?.length) {
@@ -66,7 +49,7 @@ export async function archiveUpload(
       const group = media.images.slice(i, i + 10).map((img, j) => ({
         type: "photo" as const,
         media: new InputFile(img.buf, `${i + j}.jpg`),
-        ...(i + j === 0 ? { caption } : {}),
+        ...(i + j === 0 ? { caption, parse_mode: "HTML" as const } : {}),
       }));
       const msgs = await api.sendMediaGroup(ch, group);
       first ??= msgs[0].message_id;

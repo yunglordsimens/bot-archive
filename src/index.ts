@@ -14,6 +14,7 @@ await bot.api.setMyCommands([
   { command: "theme", description: "записи по теме" },
   { command: "type", description: "записи по типу" },
   { command: "retry", description: "повторить ошибки и записи без видео" },
+  { command: "reprocess", description: "перепройти старые записи в новый формат" },
   { command: "help", description: "как пользоваться" },
   { command: "probe", description: "проверить скачивание тиктоков" },
 ]);
