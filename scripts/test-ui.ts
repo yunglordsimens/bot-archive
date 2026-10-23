@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 
 const OWNER = 585800070, CHANNEL = -1001234567890;
 const rows = [
-  { id: 1, status: "ok", theme: "рецепты", content_type: "recipe", title: "Паста", source_url: "https://t.co/1", created_at: new Date().toISOString(),
+  { id: 1, status: "ok", theme: "рецепты", project: ["здоровье и быт", "OFST"], content_type: "recipe", title: "Паста", source_url: "https://t.co/1", created_at: new Date().toISOString(),
     summary: "Быстрая паста.", tags: ["ужин"], raw_text: "x".repeat(4000), input_kind: "tiktok", origin: "tiktok",
     structured: { ingredients: ["паста"], steps: ["сварить"], lists: [{ title: "Фильмы", items: ["Амели"] }] },
     raw_meta: { en: { title: "Pasta", summary: "Quick pasta.", structured: { lists: [{ title: "Films", items: ["Amélie"] }] } },
@@ -96,4 +96,15 @@ console.log("✓ EN view");
 await bot.handleUpdate(cb("tr:1"));
 assert.equal(last().method, "sendDocument");
 console.log("✓ long transcript → .txt file");
+await bot.handleUpdate(msg("🧭 Направления"));
+assert.ok(last().p.reply_markup.inline_keyboard.flat().some((b: any) => b.text === "OFST · 1"));
+await bot.handleUpdate(cb("pr:1"));
+assert.match(last().p.text, /OFST/); assert.match(last().p.text, /Паста/);
+console.log("✓ projects menu + list");
+await bot.handleUpdate(msg("/retry"));
+assert.match(last().p.text, /снова в очереди/);
+console.log("✓ /retry");
+const { failedText, resultLine } = await import("../src/format.ts");
+console.log("✓ failed card:", failedText({ error: '{"error":{"code":503,"status":"UNAVAILABLE"}}' }).replace(/<[^>]+>/g, ""));
+console.log("✓ line with project:", resultLine(rows[0] as any));
 srv.close();

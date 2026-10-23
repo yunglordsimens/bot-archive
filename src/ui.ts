@@ -1,5 +1,5 @@
 import { InlineKeyboard, Keyboard, type Api, type Bot, type Context } from "grammy";
-import { config, THEMES, TYPES } from "./config.js";
+import { config, PROJECTS, THEMES, TYPES } from "./config.js";
 import { db, type Item } from "./db.js";
 import { archiveState } from "./archive.js";
 import { esc, listLine, plural } from "./format.js";
@@ -8,11 +8,12 @@ const html = { parse_mode: "HTML" as const, link_preview_options: { is_disabled:
 const SAVED = ["ok", "pending_media"];
 const startedAt = new Date();
 
-export const BTN = { recent: "🕘 Последние", themes: "🗂 Темы", types: "🏷 Типы", status: "📊 Статус", help: "❓ Помощь" };
+export const BTN = { recent: "🕘 Последние", projects: "🧭 Направления", themes: "🗂 Темы", types: "🏷 Типы", status: "📊 Статус", help: "❓ Помощь" };
+const PROJECT_NAMES = Object.keys(PROJECTS);
 
 export const mainKeyboard = new Keyboard()
-  .text(BTN.recent).text(BTN.themes).text(BTN.types).row()
-  .text(BTN.status).text(BTN.help)
+  .text(BTN.recent).text(BTN.projects).text(BTN.themes).row()
+  .text(BTN.types).text(BTN.status).text(BTN.help)
   .resized().persistent();
 
 const HELP = `<b>Что кидать</b>
@@ -22,13 +23,15 @@ const HELP = `<b>Что кидать</b>
 
 <b>Что происходит</b>
 Бот отвечает «принято», потом строка меняется: ⬇️ скачиваю → 🧠 разбираю → итог.
-Итог: тип · заголовок · тема · ссылка на оригинал в канале-архиве.
-Если не получилось — под сообщением будет кнопка 🔁 Повторить.
+Итог: тип · заголовок · тема · → направление · 🗄 ссылка на сообщение в канале-архиве.
+Если Gemini перегружен — бот сам повторит через несколько минут. Если не вышло совсем — кнопка 🔁 Повторить или /retry.
 
 <b>Кнопки внизу</b>
 ${BTN.recent} — 10 последних записей
-${BTN.themes} / ${BTN.types} — записи по теме или типу
-${BTN.status} — работает ли бот, канал, очередь, ошибки`;
+${BTN.projects} — записи по направлению (Lock in, OFST, UMPRUM…)
+${BTN.themes} / ${BTN.types} — записи по теме (о чём) или типу (что это)
+${BTN.status} — работает ли бот, канал, очередь, ошибки
+/retry — повторить все записи с ошибкой и без видео`;
 
 async function itemsList(title: string, filter: (q: any) => any, limit = 20) {
   const { data } = await filter(db.from("items").select().in("status", SAVED)).order("id", { ascending: false }).limit(limit);
@@ -36,11 +39,23 @@ async function itemsList(title: string, filter: (q: any) => any, limit = 20) {
   return `<b>${title}</b>\n${items.map(listLine).join("\n") || "пока пусто"}`;
 }
 
-async function countBy(column: "theme" | "content_type") {
+async function countBy(column: "theme" | "content_type" | "project") {
   const { data } = await db.from("items").select(column).in("status", SAVED).limit(10000);
   const counts = new Map<string, number>();
-  for (const r of (data ?? []) as Record<string, string>[]) counts.set(r[column], (counts.get(r[column]) ?? 0) + 1);
+  for (const r of (data ?? []) as Record<string, string | string[]>[]) {
+    for (const v of [r[column]].flat()) counts.set(v, (counts.get(v) ?? 0) + 1);
+  }
   return counts;
+}
+
+async function projectsMenu() {
+  const counts = await countBy("project");
+  const kb = new InlineKeyboard();
+  PROJECT_NAMES.forEach((p, i) => {
+    kb.text(`${p} · ${counts.get(p) ?? 0}`, `pr:${i}`);
+    if (i % 2) kb.row();
+  });
+  return kb;
 }
 
 async function themesMenu() {
@@ -86,17 +101,19 @@ async function statusMessage(api: Api, botId: number) {
     c.queued || c.processing ? `⏳ в очереди: ${c.queued} · в работе: ${c.processing}` : `⏳ очередь пустая`,
   ];
   if (c.pending_media) lines.push(`🎞 без видео (повтор раз в сутки): ${c.pending_media}`);
-  if (c.failed) lines.push(`❌ с ошибкой: ${c.failed}`);
+  if (c.failed) lines.push(`❌ с ошибкой: ${c.failed} — причина в карточке, повторить: /retry`);
   if (last) lines.push(``, `🕘 последняя: ${esc(last.title ?? "")} · ${new Date(last.created_at).toLocaleString("ru-RU", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}`);
 
   const kb = new InlineKeyboard().text("🔄 Обновить", "status");
-  if (c.failed) kb.text(`🔁 Повторить ошибки (${c.failed})`, "retryall");
+  if (c.failed + c.pending_media) kb.text(`🔁 Повторить (${c.failed + c.pending_media})`, "retryall");
   return { text: lines.join("\n"), kb };
 }
 
+// Back to the queue: given ids, or every failed + pending_media item.
 async function requeue(ids?: number[]) {
-  let q = db.from("items").update({ status: "queued", attempts: 0, error: null, updated_at: new Date().toISOString() });
-  q = ids ? q.in("id", ids).in("status", ["failed", "pending_media"]) : q.eq("status", "failed");
+  let q = db.from("items").update({ status: "queued", attempts: 0, next_retry_at: null, updated_at: new Date().toISOString() })
+    .in("status", ["failed", "pending_media"]);
+  if (ids) q = q.in("id", ids);
   const { data, error } = await q.select("id");
   if (error) throw error;
   return data?.length ?? 0;
@@ -110,6 +127,11 @@ export function registerUi(bot: Bot) {
   const showRecent = async (ctx: Context) => ctx.reply(await itemsList("🕘 Последние", (q) => q, 10), html);
   const showThemes = async (ctx: Context) => ctx.reply("🗂 Темы — выбери:", { reply_markup: await themesMenu() });
   const showTypes = async (ctx: Context) => ctx.reply("🏷 Типы — выбери:", { reply_markup: await typesMenu() });
+  const showProjects = async (ctx: Context) => ctx.reply("🧭 Направления — выбери:", { reply_markup: await projectsMenu() });
+  const retryAll = async (ctx: Context) => {
+    const n = await requeue();
+    await ctx.reply(n ? `🔁 ${plural(n, "запись", "записи", "записей")} снова в очереди` : "нечего повторять — ошибок нет");
+  };
   const showHelp = (ctx: Context) => ctx.reply(HELP, { ...html, reply_markup: mainKeyboard });
 
   bot.command("start", (ctx) =>
@@ -119,6 +141,14 @@ export function registerUi(bot: Bot) {
   bot.command("recent", showRecent);
   bot.hears(BTN.recent, showRecent);
   bot.hears(BTN.themes, showThemes);
+  bot.hears(BTN.projects, showProjects);
+  bot.command("retry", retryAll);
+  bot.command("project", async (ctx) => {
+    const q = ctx.match.trim().toLowerCase();
+    const p = q && PROJECT_NAMES.find((x) => x.toLowerCase().startsWith(q) || x.toLowerCase().includes(q));
+    if (!p) return showProjects(ctx);
+    await ctx.reply(await itemsList(`🧭 ${esc(p)}`, (b) => b.contains("project", [p])), html);
+  });
   bot.hears(BTN.types, showTypes);
   bot.hears(BTN.status, showStatus);
   bot.hears(BTN.help, showHelp);
@@ -150,6 +180,16 @@ export function registerUi(bot: Bot) {
     await ctx.editMessageText(await itemsList(`${t.emoji} ${t.ru}`, (b) => b.eq("content_type", ctx.match[1])),
       { ...html, reply_markup: new InlineKeyboard().text("← Типы", "types") });
   });
+  bot.callbackQuery(/^pr:(\d+)$/, async (ctx) => {
+    const p = PROJECT_NAMES[Number(ctx.match[1])];
+    await ctx.answerCallbackQuery();
+    await ctx.editMessageText(await itemsList(`🧭 ${esc(p)}`, (b) => b.contains("project", [p])),
+      { ...html, reply_markup: new InlineKeyboard().text("← Направления", "projects") });
+  });
+  bot.callbackQuery("projects", async (ctx) => {
+    await ctx.answerCallbackQuery();
+    await ctx.editMessageText("🧭 Направления — выбери:", { reply_markup: await projectsMenu() });
+  });
   bot.callbackQuery("themes", async (ctx) => {
     await ctx.answerCallbackQuery();
     await ctx.editMessageText("🗂 Темы — выбери:", { reply_markup: await themesMenu() });
@@ -171,8 +211,7 @@ export function registerUi(bot: Bot) {
     if (n) await ctx.editMessageText("🔁 повторяю…").catch(() => {});
   });
   bot.callbackQuery("retryall", async (ctx) => {
-    const n = await requeue();
-    await ctx.answerCallbackQuery(`повторяю ${n}`);
-    await ctx.reply(`🔁 ${plural(n, "запись", "записи", "записей")} снова в очереди`);
+    await ctx.answerCallbackQuery();
+    await retryAll(ctx);
   });
 }

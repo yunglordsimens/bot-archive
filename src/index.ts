@@ -10,8 +10,10 @@ await bot.api.setMyCommands([
   { command: "start", description: "показать кнопки" },
   { command: "status", description: "состояние бота, канала и очереди" },
   { command: "recent", description: "последние 10 записей" },
+  { command: "project", description: "записи по направлению" },
   { command: "theme", description: "записи по теме" },
   { command: "type", description: "записи по типу" },
+  { command: "retry", description: "повторить ошибки и записи без видео" },
   { command: "help", description: "как пользоваться" },
   { command: "probe", description: "проверить скачивание тиктоков" },
 ]);

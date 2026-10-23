@@ -1,5 +1,5 @@
 import { GoogleGenAI, Type, type Part } from "@google/genai";
-import { config, THEMES, TYPES } from "./config.js";
+import { config, PROJECTS, THEMES, TYPES } from "./config.js";
 import type { CardText, Structured } from "./db.js";
 
 const ai = new GoogleGenAI({ apiKey: config.geminiKey });
@@ -10,6 +10,7 @@ export type Analysis = {
   content_type: string;
   kind: string;
   theme: string;
+  project: string[];
   tags: string[];
   structured: Structured;
   raw_text: string;
@@ -24,6 +25,7 @@ const schema = {
     content_type: { type: Type.STRING, enum: Object.keys(TYPES) },
     kind: { type: Type.STRING, description: "Что это по форме: видео, мем, твит, заметка, чек, скрин переписки, статья, голосовое…" },
     theme: { type: Type.STRING, enum: THEMES },
+    project: { type: Type.ARRAY, items: { type: Type.STRING, enum: Object.keys(PROJECTS) }, description: "Направления жизни, к которым относится запись; 1–3" },
     tags: { type: Type.ARRAY, items: { type: Type.STRING }, description: "3–7 свободных тегов, строчными, по-русски" },
     structured: {
       type: Type.OBJECT,
@@ -48,7 +50,7 @@ const schema = {
     raw_text: { type: Type.STRING, description: "Дословно: что говорят и что написано на экране/картинке, на языке оригинала" },
     language: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Языки в контенте, ISO-коды: ru, uk, cs, en…" },
   },
-  required: ["title", "summary", "content_type", "kind", "theme", "tags", "structured", "raw_text", "language"],
+  required: ["title", "summary", "content_type", "kind", "theme", "project", "tags", "structured", "raw_text", "language"],
 };
 
 const SYSTEM = `Ты разбираешь сохранённый контент для личного архива. Вход может быть видео (со звуком), картинкой, аудио, текстом или страницей.
@@ -59,7 +61,12 @@ const SYSTEM = `Ты разбираешь сохранённый контент 
 - Для советов заполни structured.points.
 - Рецепт собирай из всего вместе: речь, текст на экране и описание под видео (подпись автора). structured.ingredients — с количествами, structured.steps — по порядку.
 - Если в контенте что-то перечисляется (фильмы, книги, места, инструменты, продукты, приложения, шрифты…) — вынеси каждый перечень в structured.lists: { title: название списка, items: элементы }. Названия — как в оригинале, при необходимости с короткой пометкой.
-- theme — строго одна из списка.
+- Три разных поля, не смешивай их:
+  · content_type — ЧТО это по форме (совет, рецепт, идея…);
+  · theme — О ЧЁМ это (одна тема строго из списка);
+  · project — К КАКОМУ НАПРАВЛЕНИЮ ЖИЗНИ пользователя относится: можно несколько (обычно 1–2), строго из списка; если ни к одному — «разное».
+  Направления пользователя:
+${Object.entries(PROJECTS).map(([k, v]) => `  · ${k}${v ? ` — ${v}` : ""}`).join("\n")}
 - Ничего не выдумывай: если данных мало (например, только подпись), так и скажи в summary.`;
 
 export function textPart(text: string): Part {
@@ -117,6 +124,8 @@ function validate(raw: string): Analysis {
   if (!a.summary || !a.title) throw new Error("empty summary/title");
   if (!TYPES[a.content_type]) a.content_type = "other";
   if (!THEMES.includes(a.theme)) a.theme = "разное";
+  a.project = [...new Set((a.project ?? []).filter((p) => p in PROJECTS))];
+  if (!a.project.length) a.project = ["разное"];
   a.tags = (a.tags ?? []).map((t) => t.toLowerCase().trim()).filter(Boolean);
   a.structured ??= {};
   a.raw_text ??= "";

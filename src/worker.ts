@@ -5,8 +5,8 @@ import { config } from "./config.js";
 import { claimItems, db, findByHash, updateItem, type Item, type Similar } from "./db.js";
 import { analyze, embed, mediaPart, sleep, textPart, urlPart, type Analysis } from "./gemini.js";
 import { fetchStats, fetchTikTok, fetchVideoGeneric, fetchWebPage, fetchYouTubeText, updateYtdlp, type Fetched } from "./fetchers.js";
-import { archiveCopy, archiveUpload } from "./archive.js";
-import { batchMessage, duplicateText, sourceLabel } from "./format.js";
+import { archiveCopy, archivePost, archiveUpload } from "./archive.js";
+import { batchMessage, duplicateText, esc, failedText, sourceLabel } from "./format.js";
 import { renderCard } from "./card.js";
 
 const DAY = 24 * 3600 * 1000;
@@ -136,7 +136,7 @@ async function finishReply(api: Api, it: Item) {
     if (batch.some((b) => b.status === "queued" || b.status === "processing")) return;
     text = batchMessage(batch);
   } else if (it.status === "failed") {
-    text = "⚠️ не получилось разобрать · ссылка сохранена";
+    text = failedText(it);
   } else if (it.status === "duplicate") {
     const { data } = await db.from("items").select("title, summary, created_at, archive_link").eq("id", it.duplicate_of!).single();
     text = data ? duplicateText(data) : "♻️ уже есть";
@@ -165,6 +165,10 @@ async function nearest(embedding: string, id: number): Promise<Similar | undefin
   return top && top.similarity > config.similarThreshold ? top : undefined;
 }
 
+const MAX_TRANSIENT_ATTEMPTS = 4;
+const isTransient = (e: string) => /503|500|429|UNAVAILABLE|overloaded|high demand|RESOURCE_EXHAUSTED|fetch failed|ECONNRESET|ETIMEDOUT|socket hang up/i.test(e);
+const errorReasonShort = (e: string) => (/429|RESOURCE_EXHAUSTED/i.test(e) ? "лимит Gemini" : /fetch failed|ECONN|ETIMEDOUT|socket/i.test(e) ? "нет связи" : "Gemini перегружен");
+
 async function handle(api: Api, it: Item) {
   const downloads = it.input_kind === "tiktok" || it.origin === "instagram";
   await stage(api, it, downloads ? "⬇️ скачиваю…" : it.input_kind === "link" ? "🔎 читаю…" : "🧠 разбираю…");
@@ -175,19 +179,35 @@ async function handle(api: Api, it: Item) {
     if (r.status !== "duplicate") {
       Object.assign(patch, {
         title: a.title, summary: a.summary, content_type: a.content_type, kind: a.kind,
-        theme: a.theme, tags: a.tags, structured: a.structured, raw_text: a.raw_text, language: a.language,
+        theme: a.theme, project: a.project, tags: a.tags, structured: a.structured, raw_text: a.raw_text, language: a.language, error: null,
         embedding: JSON.stringify(await embed(`${a.title}\n${a.summary}\n${a.raw_text}`)),
       });
       const similar = await nearest(patch.embedding as string, it.id);
       if (similar) patch.raw_meta = { ...(patch.raw_meta as object), similar };
+      // Every card links to a message in the archive channel: items without a file get a text post there.
+      if (!patch.archive_link) {
+        const isText = it.input_kind === "text" || it.input_kind === "forwarded";
+        const post = isText
+          ? async () => ({ fileIds: [], link: await archiveCopy(api, it.tg_chat_id, it.tg_message_id) })
+          : () => archivePost(api, `<b>${esc(a.title)}</b>\n${esc(it.source_url ?? "")}\n\n${esc(a.summary)}`);
+        patch.archive_link = (await safeArchive(post, patch)).link;
+      }
     }
     await updateItem(it.id, patch);
     Object.assign(it, patch);
   } catch (e) {
-    console.error(`item ${it.id} failed`, e);
     const error = (e instanceof Error ? e.message : String(e)).slice(0, 1000);
+    // Temporary trouble (Gemini overloaded, network): back to the queue in a few minutes instead of failing.
+    if (isTransient(error) && it.attempts < MAX_TRANSIENT_ATTEMPTS) {
+      const min = 5 * it.attempts;
+      console.warn(`item ${it.id}: temporary error, retry in ${min} min — ${error.slice(0, 200)}`);
+      await updateItem(it.id, { status: "queued", error, next_retry_at: new Date(Date.now() + min * 60_000).toISOString() });
+      await stage(api, it, `⏳ ${errorReasonShort(error)} — повторю через ${min} мин`);
+      return;
+    }
+    console.error(`item ${it.id} failed`, e);
     await updateItem(it.id, { status: "failed", error });
-    it.status = "failed";
+    Object.assign(it, { status: "failed", error });
   }
   await finishReply(api, it);
 }
@@ -208,8 +228,9 @@ async function requeueMedia() {
 }
 
 export async function startWorker(api: Api) {
-  // Items left in "processing" by a crash go back to the queue.
-  await db.from("items").update({ status: "queued" }).eq("status", "processing");
+  // Items left in "processing" by a crash or Ctrl+C go back to the queue.
+  const { data: stuck } = await db.from("items").update({ status: "queued", next_retry_at: null }).eq("status", "processing").select("id");
+  if (stuck?.length) console.log(`returned ${stuck.length} stuck item(s) to the queue: ${stuck.map((s) => s.id).join(", ")}`);
 
   setInterval(() => requeueMedia().catch((e) => console.error("requeue", e)), 3600_000);
   requeueMedia().catch((e) => console.error("requeue", e));

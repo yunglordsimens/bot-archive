@@ -29,6 +29,14 @@ function link(channelId: number, messageId: number) {
   return `https://t.me/c/${String(channelId).replace(/^-100/, "")}/${messageId}`;
 }
 
+// Items without a file (links, YouTube, pages, videos that didn't download): post a text card to the channel.
+export async function archivePost(api: Api, html: string): Promise<{ fileIds: string[]; link?: string }> {
+  const ch = await archiveChannel();
+  if (!ch) return { fileIds: [] };
+  const m = await api.sendMessage(ch, html.slice(0, 4000), { parse_mode: "HTML" });
+  return { fileIds: [], link: link(ch, m.message_id) };
+}
+
 // Original is already in Telegram — copy it to the channel.
 export async function archiveCopy(api: Api, chatId: number, messageId: number): Promise<string | undefined> {
   const ch = await archiveChannel();

@@ -31,12 +31,14 @@ export type Item = {
   content_type: string | null;
   kind: string | null;
   theme: string | null;
+  project: string[];
   tags: string[];
   structured: Structured | null;
   raw_text: string | null;
   archive_file_ids: string[];
   archive_link: string | null;
   raw_meta: RawMeta | null;
+  error: string | null;
 };
 
 export type ItemInput = {
