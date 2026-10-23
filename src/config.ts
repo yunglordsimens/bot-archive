@@ -18,6 +18,8 @@ export const config = {
   geminiFallbackModels: env("GEMINI_FALLBACK_MODELS", "gemini-3.6-flash,gemini-3.5-flash").split(",").map((s) => s.trim()),
   embedModel: env("GEMINI_EMBED_MODEL", "gemini-embedding-2"),
   embedDims: 1536,
+  // "похоже на: …" is shown when cosine similarity to an existing item is above this
+  similarThreshold: Number(env("SIMILAR_THRESHOLD", "0.9")),
   workerConcurrency: Number(env("WORKER_CONCURRENCY", "2")),
   tmpDir: env("TMP_DIR", "/tmp/bot-archive"),
 };

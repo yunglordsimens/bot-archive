@@ -35,6 +35,7 @@ export type Item = {
   raw_text: string | null;
   archive_file_ids: string[];
   archive_link: string | null;
+  raw_meta: RawMeta | null;
 };
 
 export type ItemInput = {
@@ -44,7 +45,12 @@ export type ItemInput = {
   file_size?: number;
 };
 
-export type Structured = { points?: string[]; ingredients?: string[]; steps?: string[] };
+export type NamedList = { title: string; items: string[] };
+export type Structured = { points?: string[]; ingredients?: string[]; steps?: string[]; lists?: NamedList[] };
+export type Similar = { id: number; summary: string | null; title: string | null; created_at: string; similarity: number };
+export type RawMeta = { via?: string; log?: string[]; archive_error?: string; similar?: Similar; en?: CardText };
+// Card content in one language — used for the English translation.
+export type CardText = { title: string; summary: string; structured: Structured };
 
 export async function insertItem(row: Partial<Item>): Promise<Item> {
   const { data, error } = await db.from("items").insert(row).select().single();

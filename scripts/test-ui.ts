@@ -4,7 +4,11 @@ import assert from "node:assert/strict";
 
 const OWNER = 585800070, CHANNEL = -1001234567890;
 const rows = [
-  { id: 1, status: "ok", theme: "рецепты", content_type: "recipe", title: "Паста", source_url: "https://t.co/1", created_at: new Date().toISOString() },
+  { id: 1, status: "ok", theme: "рецепты", content_type: "recipe", title: "Паста", source_url: "https://t.co/1", created_at: new Date().toISOString(),
+    summary: "Быстрая паста.", tags: ["ужин"], raw_text: "x".repeat(4000), input_kind: "tiktok", origin: "tiktok",
+    structured: { ingredients: ["паста"], steps: ["сварить"], lists: [{ title: "Фильмы", items: ["Амели"] }] },
+    raw_meta: { en: { title: "Pasta", summary: "Quick pasta.", structured: { lists: [{ title: "Films", items: ["Amélie"] }] } },
+      similar: { id: 2, title: "Мем", summary: "Смешной мем", created_at: new Date().toISOString(), similarity: 0.93 } } },
   { id: 2, status: "ok", theme: "смешное", content_type: "funny", title: "Мем", source_url: null, created_at: new Date().toISOString() },
 ];
 const srv = createServer((req, res) => {
@@ -78,4 +82,18 @@ await bot.handleUpdate(msg("https://youtu.be/dQw4w9WgXcQ?si=1"));
 const dupMsgs = calls.filter((c) => /♻️/.test(c.p?.text ?? ""));
 assert.ok(dupMsgs.length >= 1);
 console.log("✓ repeat link → " + dupMsgs.at(-1)!.p.text.replace(/<[^>]+>/g, ""));
+// Card buttons
+await bot.handleUpdate(cb("x:1"));
+assert.match(last().p.text, /Ингредиенты/); assert.match(last().p.text, /Фильмы/); assert.match(last().p.text, /похоже на: Смешной мем/);
+assert.ok(last().p.reply_markup.inline_keyboard.flat().some((b: any) => b.text === "🔼 Свернуть"));
+console.log("✓ Подробнее:\n" + last().p.text.replace(/<[^>]+>/g, ""));
+await bot.handleUpdate(cb("c:1"));
+assert.doesNotMatch(last().p.text, /Ингредиенты/);
+console.log("✓ Свернуть:", last().p.text.replace(/<[^>]+>/g, ""));
+await bot.handleUpdate(cb("en:1"));
+assert.match(last().p.text, /Films/);
+console.log("✓ EN view");
+await bot.handleUpdate(cb("tr:1"));
+assert.equal(last().method, "sendDocument");
+console.log("✓ long transcript → .txt file");
 srv.close();

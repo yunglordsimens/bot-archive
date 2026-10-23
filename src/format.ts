@@ -26,6 +26,7 @@ export function resultLine(it: Pick<Item, "content_type" | "title" | "structured
   const s = it.structured ?? {};
   if (s.points?.length) parts.push(plural(s.points.length, "пункт", "пункта", "пунктов"));
   if (s.steps?.length) parts.push(plural(s.steps.length, "шаг", "шага", "шагов"));
+  for (const l of s.lists ?? []) parts.push(`${l.title.toLowerCase()}: ${l.items.length}`);
   parts.push(it.theme ?? "разное");
   return parts.filter(Boolean).join(" · ");
 }

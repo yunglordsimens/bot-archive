@@ -1,6 +1,6 @@
 import { GoogleGenAI, Type, type Part } from "@google/genai";
 import { config, THEMES, TYPES } from "./config.js";
-import type { Structured } from "./db.js";
+import type { CardText, Structured } from "./db.js";
 
 const ai = new GoogleGenAI({ apiKey: config.geminiKey });
 
@@ -20,7 +20,7 @@ const schema = {
   type: Type.OBJECT,
   properties: {
     title: { type: Type.STRING, description: "Короткий заголовок, 3–8 слов, по-русски" },
-    summary: { type: Type.STRING, description: "Суть в 2–4 строки, по-русски" },
+    summary: { type: Type.STRING, description: "Суть в 3–5 строк, по-русски" },
     content_type: { type: Type.STRING, enum: Object.keys(TYPES) },
     kind: { type: Type.STRING, description: "Что это по форме: видео, мем, твит, заметка, чек, скрин переписки, статья, голосовое…" },
     theme: { type: Type.STRING, enum: THEMES },
@@ -31,6 +31,18 @@ const schema = {
         points: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Пункты совета/идеи" },
         ingredients: { type: Type.ARRAY, items: { type: Type.STRING } },
         steps: { type: Type.ARRAY, items: { type: Type.STRING } },
+        lists: {
+          type: Type.ARRAY,
+          description: "Перечни из контента: фильмы, книги, места, инструменты, продукты, приложения, шрифты…",
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              title: { type: Type.STRING, description: "Название списка по-русски: «Фильмы», «Места в Праге»…" },
+              items: { type: Type.ARRAY, items: { type: Type.STRING } },
+            },
+            required: ["title", "items"],
+          },
+        },
       },
     },
     raw_text: { type: Type.STRING, description: "Дословно: что говорят и что написано на экране/картинке, на языке оригинала" },
@@ -44,7 +56,9 @@ const SYSTEM = `Ты разбираешь сохранённый контент 
 - Суть бери и из речи, и из текста на экране. Если звук — только музыка, бери суть из картинки и надписей.
 - summary, title, tags — по-русски. raw_text — на языке оригинала.
 - content_type: tip (совет), recipe (рецепт), idea (идея), funny (смешное), reference (визуальный референс), other.
-- Для советов заполни structured.points; для рецептов — structured.ingredients и structured.steps.
+- Для советов заполни structured.points.
+- Рецепт собирай из всего вместе: речь, текст на экране и описание под видео (подпись автора). structured.ingredients — с количествами, structured.steps — по порядку.
+- Если в контенте что-то перечисляется (фильмы, книги, места, инструменты, продукты, приложения, шрифты…) — вынеси каждый перечень в structured.lists: { title: название списка, items: элементы }. Названия — как в оригинале, при необходимости с короткой пометкой.
 - theme — строго одна из списка.
 - Ничего не выдумывай: если данных мало (например, только подпись), так и скажи в summary.`;
 
@@ -71,7 +85,7 @@ export function urlPart(url: string, mimeType = "video/*"): Part {
 }
 
 // Single entry point for the model — swap the model here.
-async function generate(parts: Part[]): Promise<string> {
+async function generate(parts: Part[], system = SYSTEM, responseSchema: object = schema): Promise<string> {
   const models = [config.geminiModel, ...config.geminiFallbackModels];
   let lastErr: unknown;
   for (const model of models) {
@@ -80,7 +94,7 @@ async function generate(parts: Part[]): Promise<string> {
         const res = await ai.models.generateContent({
           model,
           contents: [{ role: "user", parts }],
-          config: { systemInstruction: SYSTEM, responseMimeType: "application/json", responseSchema: schema },
+          config: { systemInstruction: system, responseMimeType: "application/json", responseSchema },
         });
         return res.text ?? "";
       } catch (e: any) {
@@ -118,6 +132,30 @@ export async function analyze(parts: Part[]): Promise<Analysis> {
     if (!(e instanceof SyntaxError) && !(e instanceof Error && e.message.startsWith("empty"))) throw e;
     return validate(await generate(parts));
   }
+}
+
+const listSchema = { type: Type.ARRAY, items: { type: Type.STRING } };
+const cardSchema = {
+  type: Type.OBJECT,
+  properties: {
+    title: { type: Type.STRING },
+    summary: { type: Type.STRING },
+    structured: {
+      type: Type.OBJECT,
+      properties: {
+        points: listSchema, ingredients: listSchema, steps: listSchema,
+        lists: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { title: { type: Type.STRING }, items: listSchema }, required: ["title", "items"] } },
+      },
+    },
+  },
+  required: ["title", "summary", "structured"],
+};
+
+// On-demand English version of a card (the "EN" button).
+export async function translateCard(card: CardText): Promise<CardText> {
+  const system = "Translate this archive card into natural English. Keep the same JSON structure and the same number of items. " +
+    "For films, books, places and products use their official English names when they exist.";
+  return JSON.parse(await generate([textPart(JSON.stringify(card))], system, cardSchema)) as CardText;
 }
 
 export async function embed(text: string): Promise<number[]> {

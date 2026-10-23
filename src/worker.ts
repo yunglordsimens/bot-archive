@@ -2,11 +2,12 @@ import { createHash } from "node:crypto";
 import { InlineKeyboard, type Api } from "grammy";
 import type { Part } from "@google/genai";
 import { config } from "./config.js";
-import { claimItems, db, findByHash, updateItem, type Item } from "./db.js";
+import { claimItems, db, findByHash, updateItem, type Item, type Similar } from "./db.js";
 import { analyze, embed, mediaPart, sleep, textPart, urlPart, type Analysis } from "./gemini.js";
 import { fetchTikTok, fetchVideoGeneric, fetchWebPage, fetchYouTubeText, updateYtdlp, type Fetched } from "./fetchers.js";
 import { archiveCopy, archiveUpload } from "./archive.js";
-import { batchMessage, duplicateText, resultMessage, sourceLabel } from "./format.js";
+import { batchMessage, duplicateText, sourceLabel } from "./format.js";
+import { renderCard } from "./card.js";
 
 const DAY = 24 * 3600 * 1000;
 const MAX_MEDIA_RETRIES = 7;
@@ -139,10 +140,13 @@ async function finishReply(api: Api, it: Item) {
     const { data } = await db.from("items").select("title, summary, created_at, archive_link").eq("id", it.duplicate_of!).single();
     text = data ? duplicateText(data) : "♻️ уже есть";
   } else {
-    text = resultMessage(it);
+    const c = renderCard(it, "short");
+    await api.editMessageText(it.tg_chat_id, it.reply_message_id, c.text, { parse_mode: "HTML", link_preview_options: { is_disabled: true }, reply_markup: c.kb })
+      .catch((e) => { if (!String(e?.description ?? e).includes("not modified")) console.warn("edit reply failed", e); });
+    return;
   }
   try {
-    const retry = !it.batch_id && (it.status === "failed" || it.status === "pending_media");
+    const retry = !it.batch_id && it.status === "failed";
     await api.editMessageText(it.tg_chat_id, it.reply_message_id, text, {
       parse_mode: "HTML", link_preview_options: { is_disabled: true },
       ...(retry ? { reply_markup: new InlineKeyboard().text("🔁 Повторить", `retry:${it.id}`) } : {}),
@@ -150,6 +154,14 @@ async function finishReply(api: Api, it: Item) {
   } catch (e: any) {
     if (!String(e?.description ?? e).includes("not modified")) console.warn("edit reply failed", e);
   }
+}
+
+// Closest saved item by meaning; only returned when it's really close (SIMILAR_THRESHOLD).
+async function nearest(embedding: string, id: number): Promise<Similar | undefined> {
+  const { data, error } = await db.rpc("nearest_item", { query: embedding, exclude: id });
+  if (error) return void console.warn("nearest_item failed", error);
+  const top = (data as Similar[] | null)?.[0];
+  return top && top.similarity > config.similarThreshold ? top : undefined;
 }
 
 async function handle(api: Api, it: Item) {
@@ -165,6 +177,8 @@ async function handle(api: Api, it: Item) {
         theme: a.theme, tags: a.tags, structured: a.structured, raw_text: a.raw_text, language: a.language,
         embedding: JSON.stringify(await embed(`${a.title}\n${a.summary}\n${a.raw_text}`)),
       });
+      const similar = await nearest(patch.embedding as string, it.id);
+      if (similar) patch.raw_meta = { ...(patch.raw_meta as object), similar };
     }
     await updateItem(it.id, patch);
     Object.assign(it, patch);
