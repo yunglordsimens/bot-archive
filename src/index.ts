@@ -1,4 +1,5 @@
-import { createBot } from "./bot.js";
+import { createBot, dbErrorHint } from "./bot.js";
+import { db } from "./db.js";
 import { startWorker } from "./worker.js";
 import { archiveChannel } from "./archive.js";
 import { config } from "./config.js";
@@ -30,6 +31,16 @@ async function checkArchive() {
 }
 
 await bot.init();
+
+// Fail loudly (in Telegram too) if the database key is wrong.
+const { error: dbError } = await db.from("settings").select("key").limit(1);
+if (dbError) {
+  const text = `❌ Supabase не отвечает: ${dbErrorHint(dbError)}. Исправь .env и перезапусти бота.`;
+  console.error(text, dbError);
+  await bot.api.sendMessage(config.ownerId, text).catch(() => {});
+  process.exit(2); // config error: start-mac.sh stops instead of restarting
+}
+
 await checkArchive().catch((e) => console.error("archive check", e));
 
 startWorker(bot.api).catch((e) => {

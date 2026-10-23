@@ -1,6 +1,9 @@
 function env(name: string, fallback?: string): string {
   const v = process.env[name] ?? fallback;
-  if (v === undefined || v === "") throw new Error(`Missing env ${name}`);
+  if (v === undefined || v === "") {
+    console.error(`❌ В .env не заполнено: ${name}`);
+    process.exit(2); // config error: start-mac.sh stops instead of restarting
+  }
   return v;
 }
 

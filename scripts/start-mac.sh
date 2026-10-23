@@ -14,6 +14,8 @@ trap 'echo; echo "Бот остановлен."; exit 0' INT TERM
 
 while true; do
   npm start
+  # exit code 2 = ошибка в .env: перезапуск не поможет
+  [ $? -eq 2 ] && { echo "Исправь .env и запусти снова: ./scripts/start-mac.sh"; exit 1; }
   echo "⚠️ бот упал ($(date '+%H:%M:%S')) — перезапуск через 10 секунд…"
   sleep 10
 done

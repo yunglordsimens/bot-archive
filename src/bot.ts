@@ -72,7 +72,18 @@ function baseRow(m: Message) {
 
 async function accept(ctx: Context, row: Partial<Item>) {
   const reply = await ctx.reply(acceptedText(row.input_kind!, row.origin), { reply_parameters: { message_id: ctx.msg!.message_id } });
-  await insertItem({ ...row, reply_message_id: reply.message_id, status: "queued" } as Partial<Item>);
+  try {
+    await insertItem({ ...row, reply_message_id: reply.message_id, status: "queued" } as Partial<Item>);
+  } catch (e) {
+    console.error("insert failed", e);
+    await ctx.api.editMessageText(reply.chat.id, reply.message_id, `❌ не сохранилось: база недоступна (${dbErrorHint(e)})`).catch(() => {});
+  }
+}
+
+export function dbErrorHint(e: unknown): string {
+  const msg = String((e as any)?.message ?? e);
+  if (/invalid api key|401|JWT/i.test(msg)) return "неверный SUPABASE_SERVICE_ROLE_KEY в .env";
+  return msg.slice(0, 200);
 }
 
 // Albums arrive as separate updates with one media_group_id — buffer, then one reply per album.
