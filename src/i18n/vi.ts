@@ -69,7 +69,7 @@ export const vi: Dict = {
   ui: {
     start: "Chào bạn! Gửi cho mình liên kết, ảnh chụp màn hình, tin nhắn thoại, văn bản — mình sẽ phân tích và lưu lại.\nCác nút ở dưới 👇",
     startNoChannel: "Để lưu bản gốc, hãy tạo một kênh riêng tư và thêm mình làm quản trị viên có quyền đăng bài.",
-    help: (b) => `<b>Gửi gì</b>
+    help: `<b>Gửi gì</b>
 🎵 tiktok, ▶️ youtube, 📸 reels, 🔗 bất kỳ liên kết nào, 👤 hồ sơ
 🖼 ảnh chụp — từng ảnh hoặc album tối đa 10
 🎙 tin nhắn thoại, ⭕️ video tròn, 📝 văn bản, ↪️ tin chuyển tiếp
@@ -78,17 +78,14 @@ export const vi: Dict = {
 “vì âm thanh”, “định dạng”, “ví dụ ngược”, “muốn làm theo”, “hồ sơ”
 
 <b>Điều gì xảy ra</b>
-Bot trả lời “đã nhận”, rồi dòng đó thay đổi: ⬇️ đang tải → 🧠 đang phân tích → kết quả.
-Nếu Gemini quá tải, bot tự thử lại sau vài phút. Vẫn lỗi — bấm 🔁 hoặc /retry.
+Bot thả cảm xúc vào tin nhắn của bạn: 👀 đang xử lý → 👌 xong, 🤷 lỗi.
+Mọi thứ đã lưu nằm trong kênh lưu trữ: bài đăng, thẻ trả lời bên dưới, bản ghi.
+Trong chat chỉ có thông báo lỗi (ngắn). Một dòng có liên kết tới bài sau mỗi lần lưu — bật qua /notify.
 
-<b>Các nút ở dưới</b>
-${b.recent} — 10 mục gần nhất
-${b.projects} — theo lĩnh vực
-${b.themes} / ${b.types} — theo chủ đề (về gì) hoặc loại (là gì)
-${b.status} — bot, kênh, hàng đợi, lỗi
-
+<b>Lệnh</b> — nút “Menu”
+/recent, /project, /theme, /type — tìm mục · /status — bot và hàng đợi
 /retry — thử lại lỗi · /reprocess — cập nhật mục cũ
-/projects — lĩnh vực của bạn · /lang — ngôn ngữ`,
+/projects — lĩnh vực của bạn · /notify — thông báo · /lang — ngôn ngữ`,
     chooseThemes: "🗂 Chủ đề — chọn:", chooseTypes: "🏷 Loại — chọn:", chooseProjects: "🧭 Lĩnh vực — chọn:",
     backThemes: "← Chủ đề", backTypes: "← Loại", backProjects: "← Lĩnh vực",
     empty: "chưa có gì", recentTitle: "🕘 Gần đây", statusTitle: "📊 Trạng thái",
@@ -109,6 +106,12 @@ ${b.status} — bot, kênh, hàng đợi, lỗi
     unavailable: "không truy cập được — hãy gỡ bot khỏi quản trị viên kênh rồi thêm lại",
   },
   lang: { choose: "Chọn ngôn ngữ:", set: "Ngôn ngữ: Tiếng Việt 🇻🇳" },
+  notify: {
+    choose: "Gửi một dòng có liên kết tới bài vào chat sau mỗi lần lưu?",
+    on: "🔔 Gửi", off: "🔕 Không gửi",
+    isOn: "🔔 Đã bật: sau khi lưu mình sẽ gửi một dòng có liên kết tới bài.",
+    isOff: "🔕 Đã tắt: trong chat chỉ có cảm xúc và lỗi, mọi thứ khác ở kênh lưu trữ.",
+  },
   projects: {
     current: (l) => `🧭 Lĩnh vực của bạn:\n${l}\n\nThay đổi: /projects công việc, học tập, sở thích, khác`,
     set: (l) => `✅ Đã cập nhật lĩnh vực:\n${l}\n\nMục mới sẽ được xếp theo đó; mục cũ sau /reprocess all.`,
@@ -130,8 +133,8 @@ ${b.status} — bot, kênh, hàng đợi, lỗi
     failed: (n) => `⚠️ <b>thất bại</b>: ${n}`,
   },
   commands: {
-    start: "hiện các nút", status: "trạng thái bot, kênh và hàng đợi", recent: "10 mục gần nhất",
-    project: "mục theo lĩnh vực", theme: "mục theo chủ đề", type: "mục theo loại", retry: "thử lại lỗi và mục chưa có video",
-    reprocess: "cập nhật mục cũ sang định dạng mới", projects: "lĩnh vực của tôi", lang: "ngôn ngữ", help: "cách dùng",
+    recent: "10 mục gần nhất", project: "mục theo lĩnh vực", theme: "mục theo chủ đề", type: "mục theo loại",
+    status: "bot, kênh và hàng đợi", retry: "thử lại lỗi và mục chưa có video", reprocess: "cập nhật mục cũ sang định dạng mới",
+    projects: "lĩnh vực của tôi", notify: "một dòng có liên kết tới bài sau khi lưu", lang: "ngôn ngữ", help: "cách dùng",
   },
 };

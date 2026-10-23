@@ -8,7 +8,8 @@ import { needsFormatAnalysis, parseHints } from "./hints.js";
 import { addFormatAnalysis, contextText, tgDownload } from "./analysis.js";
 import { fetchComments, fetchMeta, fetchProfile, fetchTikTok, fetchVideoGeneric, fetchWebPage, fetchYouTubeText, profileHandle, resolveTikTok, updateYtdlp, type Fetched } from "./fetchers.js";
 import { postCard, postTranscript, publishToChannel, type Publish } from "./channel.js";
-import { batchMessage, duplicateText, failedText, sourceLabel } from "./format.js";
+import { batchMessage, duplicateText, failedText } from "./format.js";
+import { react, REACT } from "./reactions.js";
 import { tr, type Dict } from "./i18n/index.js";
 import { getUserById, miscProject, profileOf, type User } from "./users.js";
 import { renderCard } from "./card.js";
@@ -35,9 +36,9 @@ async function safeArchive(fn: () => Promise<{ fileIds: string[]; link?: string 
 }
 
 // Status line on the "принято" message while the item is being processed.
-async function stage(api: Api, it: Item, d: Dict, text: string) {
-  if (!it.reply_message_id || it.batch_id) return;
-  await api.editMessageText(it.tg_chat_id, it.reply_message_id, `${sourceLabel(d, it.input_kind, it.origin)} · ${text}`).catch(() => {});
+// Progress is shown by the 👀 reaction only; the steps go to the Terminal log.
+async function stage(_api: Api, it: Item, _d: Dict, text: string) {
+  console.log(`item ${it.id}: ${text}`);
 }
 
 async function processVideoLink(api: Api, it: Item, u: User, f: Fetched, commentsP: Promise<string[]>): Promise<Result> {
@@ -157,36 +158,42 @@ async function processProfile(api: Api, it: Item, u: User): Promise<Result> {
   return { analysis, patch, status: "ok", publish: media.length ? { kind: "copy" } : undefined, media };
 }
 
+// Albums already reported (one message per album, even if two photos finish at the same moment).
+const batchesDone = new Set<string>();
+
+// The result lives in the archive channel. In the chat: a reaction on the user's message, short errors,
+// and — with /notify on — one line with a link to the post (with the card buttons).
 async function finishReply(api: Api, it: Item, u: User) {
-  if (!it.reply_message_id) return;
   const d = tr(u.lang);
-  let text: string;
+  const opts = { parse_mode: "HTML" as const, link_preview_options: { is_disabled: true },
+    reply_parameters: { message_id: it.tg_message_id, allow_sending_without_reply: true } };
+  const send = (text: string, extra: object = {}) => api.sendMessage(it.tg_chat_id, text, { ...opts, ...extra }).catch((e) => void console.warn("chat message failed", e));
+  await react(api, it.tg_chat_id, it.tg_message_id, it.status === "failed" ? REACT.error : it.status === "duplicate" ? REACT.repeat : REACT.done);
+
   if (it.batch_id) {
     const { data } = await db.from("items").select().eq("user_id", it.user_id).eq("batch_id", it.batch_id).order("id");
     const batch = (data ?? []) as Item[];
-    if (batch.some((b) => b.status === "queued" || b.status === "processing")) return;
-    text = batchMessage(d, batch, miscProject(u));
-  } else if (it.status === "failed") {
-    text = failedText(d, it);
-  } else if (it.status === "duplicate") {
-    const { data } = await db.from("items").select("title, summary, created_at, archive_link").eq("id", it.duplicate_of!).single();
-    text = data ? duplicateText(d, data) : d.dup("");
-  } else {
-    const c = renderCard(it, "short", u);
-    await api.editMessageText(it.tg_chat_id, it.reply_message_id, c.text, { parse_mode: "HTML", link_preview_options: { is_disabled: true }, reply_markup: c.kb })
-      .catch((e) => { if (!String(e?.description ?? e).includes("not modified")) console.warn("edit reply failed", e); });
-    for (const t of c.more) await api.sendMessage(it.tg_chat_id, t, { parse_mode: "HTML", reply_parameters: { message_id: it.reply_message_id } }).catch(() => {});
+    if (batch.some((b) => b.status === "queued" || b.status === "processing") || batchesDone.has(it.batch_id)) return;
+    batchesDone.add(it.batch_id);
+    const failed = batch.filter((b) => b.status === "failed");
+    if (failed.length || u.notify) await send(batchMessage(d, batch, miscProject(u)), { reply_parameters: { message_id: batch[0].tg_message_id, allow_sending_without_reply: true } });
     return;
   }
-  try {
-    const retry = !it.batch_id && it.status === "failed";
-    await api.editMessageText(it.tg_chat_id, it.reply_message_id, text, {
-      parse_mode: "HTML", link_preview_options: { is_disabled: true },
-      ...(retry ? { reply_markup: new InlineKeyboard().text(d.card.retry, `retry:${it.id}`) } : {}),
-    });
-  } catch (e: any) {
-    if (!String(e?.description ?? e).includes("not modified")) console.warn("edit reply failed", e);
+  if (it.status === "failed") return void send(failedText(d, it), { reply_markup: new InlineKeyboard().text(d.card.retry, `retry:${it.id}`) });
+  if (it.status === "pending_media") {
+    // Saved without the video — worth a short note even with /notify off.
+    return void send(`${d.pendingNote}${it.archive_link ? ` · <a href="${it.archive_link}">${d.inArchive}</a>` : ""}`,
+      { reply_markup: new InlineKeyboard().text(d.card.retry, `retry:${it.id}`) });
   }
+  if (!u.notify) return;
+  if (it.status === "duplicate") {
+    const { data } = await db.from("items").select("title, summary, created_at, archive_link").eq("id", it.duplicate_of!).single();
+    if (data) await send(duplicateText(d, data));
+    return;
+  }
+  const c = renderCard(it, "short", u);
+  await send(c.text, { reply_markup: c.kb });
+  for (const t of c.more) await send(t);
 }
 
 // Closest saved item by meaning; only returned when it's really close (SIMILAR_THRESHOLD).
@@ -242,6 +249,7 @@ const errorReasonShort = (d: Dict, e: string) => (/429|RESOURCE_EXHAUSTED/i.test
 export async function handle(api: Api, it: Item) {
   const u = await getUserById(it.user_id);
   const d = tr(u.lang);
+  await react(api, it.tg_chat_id, it.tg_message_id, REACT.working); // also on retries
   const downloads = it.input_kind === "tiktok" || it.origin === "instagram";
   await stage(api, it, d, downloads ? d.stage.download : it.input_kind === "link" || it.input_kind === "profile" ? d.stage.read : d.stage.think);
   try {

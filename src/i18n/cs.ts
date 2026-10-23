@@ -69,7 +69,7 @@ export const cs: Dict = {
   ui: {
     start: "Ahoj! Posílej sem odkazy, snímky obrazovky, hlasovky, text — rozeberu a uložím.\nTlačítka dole 👇",
     startNoChannel: "Aby se ukládaly originály, vytvoř soukromý kanál a přidej mě tam jako admina s právem publikovat.",
-    help: (b) => `<b>Co posílat</b>
+    help: `<b>Co posílat</b>
 🎵 tiktok, ▶️ youtube, 📸 reels, 🔗 jakýkoli odkaz, 👤 profil
 🖼 snímky — po jednom nebo album až 10
 🎙 hlasovky, ⭕️ videozprávy, 📝 text, ↪️ přeposlané zprávy
@@ -78,17 +78,14 @@ export const cs: Dict = {
 „kvůli zvuku“, „formát“, „antipříklad“, „chci taky“, „profil“
 
 <b>Co se děje</b>
-Bot odpoví „přijato“, pak se řádek mění: ⬇️ stahuji → 🧠 rozebírám → výsledek.
-Když je Gemini přetížené, bot to za pár minut zkusí znovu. Nevyšlo to — 🔁 nebo /retry.
+Bot dá na tvou zprávu reakci: 👀 zpracovává se → 👌 hotovo, 🤷 chyba.
+Všechno uložené je v archivním kanálu: příspěvek, karta v odpovědi, přepis.
+Do chatu chodí jen chyby (stručně). Řádek s odkazem na příspěvek po každém uložení — přes /notify.
 
-<b>Tlačítka dole</b>
-${b.recent} — posledních 10 záznamů
-${b.projects} — podle oblasti života
-${b.themes} / ${b.types} — podle tématu (o čem) nebo typu (co to je)
-${b.status} — bot, kanál, fronta, chyby
-
+<b>Příkazy</b> — tlačítko „Menu“
+/recent, /project, /theme, /type — najít záznamy · /status — bot a fronta
 /retry — zopakovat chyby · /reprocess — aktualizovat staré záznamy
-/projects — tvoje oblasti · /lang — jazyk`,
+/projects — tvoje oblasti · /notify — upozornění · /lang — jazyk`,
     chooseThemes: "🗂 Témata — vyber:", chooseTypes: "🏷 Typy — vyber:", chooseProjects: "🧭 Oblasti — vyber:",
     backThemes: "← Témata", backTypes: "← Typy", backProjects: "← Oblasti",
     empty: "zatím nic", recentTitle: "🕘 Poslední", statusTitle: "📊 Stav",
@@ -109,6 +106,12 @@ ${b.status} — bot, kanál, fronta, chyby
     unavailable: "není dostupný — odeber bota z adminů kanálu a přidej ho znovu",
   },
   lang: { choose: "Vyber jazyk:", set: "Jazyk: čeština 🇨🇿" },
+  notify: {
+    choose: "Posílat do chatu řádek s odkazem na příspěvek po každém uložení?",
+    on: "🔔 Posílat", off: "🔕 Neposílat",
+    isOn: "🔔 Zapnuto: po uložení pošlu řádek s odkazem na příspěvek.",
+    isOff: "🔕 Vypnuto: v chatu jen reakce a chyby, všechno ostatní je v archivním kanálu.",
+  },
   projects: {
     current: (l) => `🧭 Tvoje oblasti:\n${l}\n\nZměnit: /projects práce, škola, koníčky, různé`,
     set: (l) => `✅ Oblasti aktualizovány:\n${l}\n\nNové záznamy se podle nich roztřídí; staré po /reprocess all.`,
@@ -130,8 +133,8 @@ ${b.status} — bot, kanál, fronta, chyby
     failed: (n) => `⚠️ <b>nepovedlo se</b>: ${n}`,
   },
   commands: {
-    start: "zobrazit tlačítka", status: "stav bota, kanálu a fronty", recent: "posledních 10 záznamů",
-    project: "záznamy podle oblasti", theme: "záznamy podle tématu", type: "záznamy podle typu", retry: "zopakovat chyby a záznamy bez videa",
-    reprocess: "aktualizovat staré záznamy na nový formát", projects: "moje oblasti", lang: "jazyk", help: "jak používat",
+    recent: "posledních 10 záznamů", project: "záznamy podle oblasti", theme: "záznamy podle tématu", type: "záznamy podle typu",
+    status: "bot, kanál a fronta", retry: "zopakovat chyby a záznamy bez videa", reprocess: "aktualizovat staré záznamy na nový formát",
+    projects: "moje oblasti", notify: "řádek s odkazem na příspěvek po uložení", lang: "jazyk", help: "jak používat",
   },
 };

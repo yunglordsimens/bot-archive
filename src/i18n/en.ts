@@ -69,7 +69,7 @@ export const en: Dict = {
   ui: {
     start: "Hi! Send me links, screenshots, voice messages, text — I'll analyse and save them.\nButtons below 👇",
     startNoChannel: "To keep the originals, create a private channel and add me there as an admin who can post.",
-    help: (b) => `<b>What to send</b>
+    help: `<b>What to send</b>
 🎵 tiktok, ▶️ youtube, 📸 reels, 🔗 any link, 👤 profile
 🖼 screenshots — one by one or an album of up to 10
 🎙 voice, ⭕️ video notes, 📝 text, ↪️ forwarded messages
@@ -78,17 +78,14 @@ export const en: Dict = {
 “for the sound”, “format”, “anti-example”, “want the same”, “profile”
 
 <b>What happens</b>
-The bot replies “received”, then the line changes: ⬇️ downloading → 🧠 analysing → result.
-If Gemini is overloaded the bot retries in a few minutes. Still failed — tap 🔁 or /retry.
+The bot reacts to your message: 👀 working → 👌 done, 🤷 error.
+Everything saved lives in the archive channel: the post, the card as a reply, the transcript.
+The chat only gets errors (short). A line with a link to the post after each save — via /notify.
 
-<b>Buttons below</b>
-${b.recent} — last 10 items
-${b.projects} — by life area
-${b.themes} / ${b.types} — by topic (what about) or type (what it is)
-${b.status} — bot, channel, queue, errors
-
+<b>Commands</b> — the “Menu” button
+/recent, /project, /theme, /type — find items · /status — bot and queue
 /retry — retry errors · /reprocess — update old items
-/projects — your areas · /lang — language`,
+/projects — your areas · /notify — notifications · /lang — language`,
     chooseThemes: "🗂 Topics — pick one:", chooseTypes: "🏷 Types — pick one:", chooseProjects: "🧭 Areas — pick one:",
     backThemes: "← Topics", backTypes: "← Types", backProjects: "← Areas",
     empty: "nothing yet", recentTitle: "🕘 Recent", statusTitle: "📊 Status",
@@ -109,6 +106,12 @@ ${b.status} — bot, channel, queue, errors
     unavailable: "unavailable — remove the bot from the channel admins and add it again",
   },
   lang: { choose: "Choose a language:", set: "Language: English 🇬🇧" },
+  notify: {
+    choose: "Send a line with a link to the post into the chat after each save?",
+    on: "🔔 Send", off: "🔕 Don't send",
+    isOn: "🔔 On: after saving I'll send a line with a link to the post.",
+    isOff: "🔕 Off: the chat only gets reactions and errors, everything else is in the archive channel.",
+  },
   projects: {
     current: (l) => `🧭 Your areas:\n${l}\n\nChange: /projects work, study, hobby, misc`,
     set: (l) => `✅ Areas updated:\n${l}\n\nNew items will use them; old ones after /reprocess all.`,
@@ -130,8 +133,8 @@ ${b.status} — bot, channel, queue, errors
     failed: (n) => `⚠️ <b>failed</b>: ${n}`,
   },
   commands: {
-    start: "show buttons", status: "bot, channel and queue status", recent: "last 10 items",
-    project: "items by area", theme: "items by topic", type: "items by type", retry: "retry errors and items without video",
-    reprocess: "update old items to the new format", projects: "my areas", lang: "language", help: "how to use",
+    recent: "last 10 items", project: "items by area", theme: "items by topic", type: "items by type",
+    status: "bot, channel and queue", retry: "retry errors and items without video", reprocess: "update old items to the new format",
+    projects: "my areas", notify: "a line with a link to the post after saving", lang: "language", help: "how to use",
   },
 };

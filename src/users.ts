@@ -14,6 +14,7 @@ export type User = {
   projects: Record<string, string> | null; // direction → hint for the model; null = defaults for the language
   themes: string[] | null;                 // null = defaults for the language
   is_admin: boolean;
+  notify: boolean; // one line with a link to the post after saving (otherwise only reactions and errors)
 };
 
 const TTL = 60_000;

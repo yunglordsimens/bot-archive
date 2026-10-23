@@ -1,4 +1,4 @@
-import { InlineKeyboard, Keyboard, type Api, type Bot } from "grammy";
+import { InlineKeyboard, type Api, type Bot } from "grammy";
 import { config, TYPE_EMOJI } from "./config.js";
 import { db, type Item } from "./db.js";
 import { archiveState } from "./archive.js";
@@ -11,10 +11,8 @@ const SAVED = ["ok", "pending_media"];
 const TYPES = Object.keys(TYPE_EMOJI);
 const startedAt = new Date();
 
-export const mainKeyboard = (d: Dict) => new Keyboard()
-  .text(d.btn.recent).text(d.btn.projects).text(d.btn.themes).row()
-  .text(d.btn.types).text(d.btn.status).text(d.btn.help)
-  .resized().persistent();
+// No persistent keyboard (SPEC §6.0): commands live in the "Menu" button. This removes the old keyboard from the chat.
+const removeKeyboard = { remove_keyboard: true as const };
 
 // Every query is limited to the user's own items.
 const mine = (u: User) => db.from("items").select().eq("user_id", u.id).in("status", SAVED);
@@ -127,23 +125,20 @@ export function registerUi(bot: Bot<Ctx>) {
     const n = await requeue(ctx.user);
     await ctx.reply(n ? d.ui.requeued(plural(d, n, d.forms.items)) : d.ui.nothingToRetry);
   };
-  const showHelp = (ctx: Ctx) => {
-    const d = tr(ctx.user.lang);
-    return ctx.reply(d.ui.help(d.btn), { ...html, reply_markup: mainKeyboard(d) });
-  };
+  const showHelp = (ctx: Ctx) => ctx.reply(tr(ctx.user.lang).ui.help, { ...html, reply_markup: removeKeyboard });
 
   bot.command("start", async (ctx) => {
     const d = tr(ctx.user.lang);
     if (!ctx.user.name && ctx.from) ctx.user = await updateUser(ctx.user, { name: [ctx.from.first_name, ctx.from.username && `@${ctx.from.username}`].filter(Boolean).join(" ") });
     await setCommands(ctx.api, ctx.user);
     const noChannel = !(await archiveState(ctx.api, ctx.me.id, ctx.user)).ok;
-    await ctx.reply(`${d.ui.start}${noChannel ? `\n\n${d.ui.startNoChannel}` : ""}`, { reply_markup: mainKeyboard(d) });
+    await ctx.reply(`${d.ui.start}${noChannel ? `\n\n${d.ui.startNoChannel}` : ""}`, { reply_markup: removeKeyboard });
   });
   bot.command("help", showHelp);
   bot.command("status", showStatus);
   bot.command("recent", showRecent);
   bot.command("retry", retryAll);
-  // Reply-keyboard buttons, in whatever language they were shown.
+  // Old reply-keyboard buttons (until the chat gets /start and the keyboard disappears).
   bot.hears(allButtons("recent"), showRecent);
   bot.hears(allButtons("themes"), showThemes);
   bot.hears(allButtons("projects"), showProjects);
@@ -196,7 +191,19 @@ export function registerUi(bot: Bot<Ctx>) {
     await ctx.answerCallbackQuery();
     await setCommands(ctx.api, ctx.user);
     await ctx.editMessageText(d.lang.set).catch(() => {});
-    await ctx.reply(d.ui.start, { reply_markup: mainKeyboard(d) });
+  });
+
+  // /notify: after saving, one line with a link to the post (off = only reactions and errors in the chat).
+  const notifyKb = (d: Dict, on: boolean) => new InlineKeyboard().text(`${on ? "● " : ""}${d.notify.on}`, "notify:on").text(`${on ? "" : "● "}${d.notify.off}`, "notify:off");
+  bot.command("notify", async (ctx) => {
+    const d = tr(ctx.user.lang);
+    await ctx.reply(`${d.notify.choose}\n\n${ctx.user.notify ? d.notify.isOn : d.notify.isOff}`, { reply_markup: notifyKb(d, ctx.user.notify) });
+  });
+  bot.callbackQuery(/^notify:(on|off)$/, async (ctx) => {
+    ctx.user = await updateUser(ctx.user, { notify: ctx.match[1] === "on" });
+    const d = tr(ctx.user.lang);
+    await ctx.answerCallbackQuery();
+    await ctx.editMessageText(ctx.user.notify ? d.notify.isOn : d.notify.isOff, { reply_markup: notifyKb(d, ctx.user.notify) }).catch(() => {});
   });
 
   // Admin: add users — only by Telegram id, only the owner/admins.

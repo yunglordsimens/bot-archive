@@ -7,8 +7,8 @@ Object.assign(process.env, { BOT_TOKEN: "1:x", OWNER_ID: String(OWNER), GEMINI_A
 
 const now = new Date().toISOString();
 tables.users.push(
-  { id: 1, telegram_user_id: OWNER, lang: "ru", is_admin: true, archive_channel_id: -1001, projects: null, themes: null, name: "owner" },
-  { id: 2, telegram_user_id: CZ, lang: "cs", is_admin: false, archive_channel_id: null, projects: null, themes: null, name: null },
+  { id: 1, telegram_user_id: OWNER, lang: "ru", is_admin: true, archive_channel_id: -1001, projects: null, themes: null, name: "owner", notify: false },
+  { id: 2, telegram_user_id: CZ, lang: "cs", is_admin: false, archive_channel_id: null, projects: null, themes: null, name: null, notify: false },
 );
 const item = (id: number, user_id: number, title: string, extra: object = {}) => ({
   id, user_id, status: "ok", title, created_at: now, content_type: "recipe", theme: "рецепты", project: ["здоровье и быт"], tags: ["ужин"],
@@ -34,19 +34,21 @@ const msg = (from: number, text: string) => ({ update_id: uid++, message: { mess
   ...(text.startsWith("/") ? { entities: [{ type: "bot_command", offset: 0, length: text.split(" ")[0].length }] } : {}) } } as any);
 const cb = (from: number, data: string) => ({ update_id: uid++, callback_query: { id: String(uid), from: { id: from, is_bot: false, first_name: "u" }, chat_instance: "x", data,
   message: { message_id: 5, date: 0, chat: { id: from, type: "private" }, text: "x" } } } as any);
-const sent = () => calls.filter((c) => !["answerCallbackQuery", "setMyCommands", "getChatMember", "getChat"].includes(c.method));
+const sent = () => calls.filter((c) => !["answerCallbackQuery", "setMyCommands", "getChatMember", "getChat", "setMessageReaction"].includes(c.method));
 const last = () => sent().at(-1)!;
 const answers = () => calls.filter((c) => c.method === "answerCallbackQuery");
 const strip = (s: string) => s.replace(/<[^>]+>/g, "");
 
 // Languages
 await bot.handleUpdate(msg(OWNER, "/start"));
-assert.ok(last().p.reply_markup.keyboard.flat().some((b: any) => (b.text ?? b) === "📊 Статус"));
+assert.match(last().p.text, /Привет/); assert.equal(last().p.reply_markup.remove_keyboard, true);
 await bot.handleUpdate(msg(CZ, "/start"));
 assert.match(last().p.text, /Ahoj/);
 assert.match(last().p.text, /soukromý kanál/); // no archive channel yet → hint
-assert.ok(last().p.reply_markup.keyboard.flat().some((b: any) => (b.text ?? b) === "📊 Stav"));
-console.log("✓ /start: Russian for the owner, Czech for the second user (+ channel hint)");
+assert.equal(last().p.reply_markup.remove_keyboard, true);
+const menu = calls.filter((c) => c.method === "setMyCommands" && c.p.scope?.chat_id === CZ).at(-1)!;
+assert.ok(menu.p.commands.some((c: any) => c.command === "notify" && /odkazem/.test(c.description)));
+console.log("✓ /start: Russian / Czech, old keyboard removed, commands in the “Menu” in the user's language");
 
 // Isolation
 await bot.handleUpdate(msg(CZ, "🕘 Poslední"));
@@ -92,8 +94,7 @@ await bot.handleUpdate(msg(CZ, "/projects škola, práce, design"));
 assert.deepEqual(Object.keys(tables.users[1].projects), ["škola", "práce", "design", "různé"]);
 await bot.handleUpdate(cb(CZ, "lang:en"));
 assert.equal(tables.users[1].lang, "en");
-assert.ok(last().p.reply_markup.keyboard.flat().some((b: any) => (b.text ?? b) === "📊 Status"));
-await bot.handleUpdate(msg(CZ, "📊 Status"));
+await bot.handleUpdate(msg(CZ, "/status"));
 assert.match(last().p.text, /saved: 1/);
 console.log("✓ /projects sets own areas (misc kept last), /lang switches the whole interface");
 
@@ -123,9 +124,20 @@ console.log("✓ strangers get no reply");
 
 // Repeat detection is per user: the same link saved by another user is not a repeat.
 tables.items.push(item(6, 1, "Видео", { text_hash: (await import("../src/dedup.ts")).urlHash ? await (await import("../src/dedup.ts")).urlHash("https://www.tiktok.com/@a/video/7") : "" }));
+const reactions = () => calls.filter((c) => c.method === "setMessageReaction");
+const before2 = sent().length;
 await bot.handleUpdate(msg(CZ, "https://www.tiktok.com/@a/video/7"));
-assert.match(last().p.text, /tiktok · received/);
+assert.equal(reactions().at(-1)!.p.reaction[0].emoji, "👀"); assert.equal(sent().length, before2); // no "received" message
+assert.ok(tables.items.some((i) => i.user_id === 2 && i.status === "queued" && i.source_url === "https://www.tiktok.com/@a/video/7"));
+await bot.handleUpdate(msg(OWNER, "https://www.tiktok.com/@a/video/7"));
+assert.equal(reactions().at(-1)!.p.reaction[0].emoji, "🤝"); assert.equal(sent().length, before2); // notify off → just the reaction
+console.log("✓ intake: 👀 reaction instead of a message; repeats per user, 🤝 with /notify off");
+
+await bot.handleUpdate(msg(OWNER, "/notify"));
+assert.match(last().p.text, /Выключено/);
+await bot.handleUpdate(cb(OWNER, "notify:on"));
+assert.equal(tables.users[0].notify, true);
 await bot.handleUpdate(msg(OWNER, "https://www.tiktok.com/@a/video/7"));
 assert.match(last().p.text, /повтор/);
-console.log("✓ repeats are per user");
+console.log("✓ /notify on → the repeat line comes to the chat");
 process.exit(0);

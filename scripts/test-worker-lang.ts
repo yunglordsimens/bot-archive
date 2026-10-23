@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { startFakeSupabase, tables } from "./fake-supabase.ts";
 
 Object.assign(process.env, { BOT_TOKEN: "1:x", OWNER_ID: "585800070", SUPABASE_SERVICE_ROLE_KEY: "x", SUPABASE_URL: await startFakeSupabase() });
-tables.users.push({ id: 2, telegram_user_id: 777, lang: "cs", is_admin: false, archive_channel_id: -1002, projects: null, themes: null });
+tables.users.push({ id: 2, telegram_user_id: 777, lang: "cs", is_admin: false, archive_channel_id: -1002, projects: null, themes: null, notify: false });
 const it: any = {
   id: 50, user_id: 2, status: "processing", attempts: 1, input_kind: "text", origin: "telegram", tg_chat_id: 777, tg_message_id: 3, reply_message_id: 4,
   input: { text: "Tip: v Praze je nejlepší kafe v Café Lounge a v Místo. Chci taky otevřít malou kavárnu." }, raw_meta: null, value_in: [], project: [], tags: [],
@@ -31,9 +31,10 @@ const post = inChannel[0], card = inChannel.find((c) => c.p.reply_parameters)!;
 assert.ok(post, "post goes to the user's own channel");
 assert.doesNotMatch(post.p.text, /Proč pro mě/); // header only
 assert.match(card.p.text, /Proč pro mě/); assert.equal(card.p.reply_parameters.message_id, 70);
-const stages = calls.filter((c) => c.method === "editMessageText" && c.p.chat_id === 777).map((c) => c.p.text.replace(/<[^>]+>/g, ""));
-console.log("chat messages:", stages);
-assert.match(stages[0], /rozebírám/);
+const reactions = calls.filter((c) => c.method === "setMessageReaction").map((c) => c.p.reaction[0].emoji);
+assert.deepEqual(reactions, ["👀", "👌"]);
+assert.ok(!calls.some((c) => c.method === "sendMessage" && c.p.chat_id === 777)); // /notify off → nothing in the chat
+console.log("chat: reactions", reactions.join(" → "), "· no messages");
 console.log("post in -1002:\n" + post.p.text.replace(/<[^>]+>/g, "") + "\n--- card (reply):\n" + card.p.text.replace(/<[^>]+>/g, ""));
 console.log("✓ Czech user: Czech lists and labels, stance from the hint, EN copy, post in their own channel");
 process.exit(0);

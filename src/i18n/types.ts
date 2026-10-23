@@ -50,7 +50,7 @@ export type Dict = {
   post: { source: string; why: string; followers: Fn1; company: string; person: string; description: string };
 
   ui: {
-    start: string; startNoChannel: string; help: (b: Dict["btn"]) => string;
+    start: string; startNoChannel: string; help: string;
     chooseThemes: string; chooseTypes: string; chooseProjects: string; backThemes: string; backTypes: string; backProjects: string;
     empty: string; recentTitle: string; statusTitle: string; running: (time: string, h: number, m: number) => string;
     channelOk: Fn1; channelBad: Fn1; model: string; saved: string; queue: (q: number, p: number) => string; queueEmpty: string;
@@ -59,11 +59,12 @@ export type Dict = {
   };
   channel: { connected: Fn1; pressStart: string; disconnected: Fn1; notConnected: string; notAdmin: string; unavailable: string };
   lang: { choose: string; set: string };
+  notify: { choose: string; on: string; off: string; isOn: string; isOff: string };
   projects: { current: Fn1; set: Fn1 };
   admin: { usage: string; added: (id: number, lang: string) => string; exists: string; list: string };
   reprocess: {
     running: string; allDone: string; start: Fn1; progress: (i: number, n: number) => string;
     done: (ok: number, n: number) => string; edited: Fn1; reposted: Fn1; failed: Fn1;
   };
-  commands: Record<"start" | "status" | "recent" | "project" | "theme" | "type" | "retry" | "reprocess" | "projects" | "lang" | "help", string>;
+  commands: Record<"recent" | "project" | "theme" | "type" | "status" | "retry" | "reprocess" | "projects" | "notify" | "lang" | "help", string>;
 };

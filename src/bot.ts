@@ -2,8 +2,9 @@ import { Bot } from "grammy";
 import type { Message, MessageEntity } from "grammy/types";
 import { config, TG_FILE_LIMIT } from "./config.js";
 import { db, findByTextHash, insertItem, type Item } from "./db.js";
-import { acceptedText, duplicateText } from "./format.js";
-import { plural, tr } from "./i18n/index.js";
+import { duplicateText } from "./format.js";
+import { react, REACT } from "./reactions.js";
+import { tr } from "./i18n/index.js";
 import { getUserByTg, updateUser, type Ctx, type User } from "./users.js";
 import { fetchTikTok, profileHandle } from "./fetchers.js";
 import { parseHints } from "./hints.js";
@@ -67,14 +68,17 @@ function baseRow(m: Message, u: User) {
   return { user_id: u.id, tg_chat_id: m.chat.id, tg_message_id: m.message_id, origin: "telegram", ...forwardInfo(m) };
 }
 
+// Saved to the queue → 👀 on the user's message; the worker turns it into 👌 / 🤷. No "received" message.
 async function accept(ctx: Ctx, row: Partial<Item>) {
   const d = tr(ctx.user.lang);
-  const reply = await ctx.reply(acceptedText(d, row.input_kind!, row.origin), { reply_parameters: { message_id: ctx.msg!.message_id } });
+  const msgId = ctx.msg!.message_id;
   try {
-    await insertItem({ ...row, reply_message_id: reply.message_id, status: "queued" } as Partial<Item>);
+    await insertItem({ ...row, status: "queued" } as Partial<Item>);
+    await react(ctx.api, ctx.chat!.id, msgId, REACT.working);
   } catch (e) {
     console.error("insert failed", e);
-    await ctx.api.editMessageText(reply.chat.id, reply.message_id, d.dbDown(dbErrorHint(e, d.dbBadKey))).catch(() => {});
+    await react(ctx.api, ctx.chat!.id, msgId, REACT.error);
+    await ctx.reply(d.dbDown(dbErrorHint(e, d.dbBadKey)), { reply_parameters: { message_id: msgId } }).catch(() => {});
   }
 }
 
@@ -96,17 +100,19 @@ async function flushAlbum(groupId: string) {
   const ok = files.filter(({ f }) => (f.file_size ?? 0) <= TG_FILE_LIMIT);
   const u = a.ctx.user;
   const d = tr(u.lang);
-  const reply = await a.ctx.api.sendMessage(msgs[0].chat.id,
-    `🖼 ${plural(d, ok.length, d.forms.screens)} · ${d.accepted}${tooBig ? ` · ${d.tooBigN(tooBig)}` : ""}`,
-    { reply_parameters: { message_id: msgs[0].message_id } });
+  for (const { m, f } of files) {
+    if ((f.file_size ?? 0) > TG_FILE_LIMIT) await react(a.ctx.api, m.chat.id, m.message_id, REACT.error);
+  }
+  if (tooBig) await a.ctx.api.sendMessage(msgs[0].chat.id, d.tooBigN(tooBig), { reply_parameters: { message_id: msgs[0].message_id } }).catch(() => {});
   if (!ok.length) return;
   const caption = msgs.find((m) => m.caption)?.caption;
   // One insert so the worker never sees half an album.
   const { error } = await db.from("items").insert(ok.map(({ m, f }) => ({
-    ...baseRow(m, u), input_kind: f.input_kind, tg_file_id: f.file_id, batch_id: groupId, reply_message_id: reply.message_id,
+    ...baseRow(m, u), input_kind: f.input_kind, tg_file_id: f.file_id, batch_id: groupId,
     input: { file_id: f.file_id, mime: f.mime, file_size: f.file_size, text: caption },
   })));
   if (error) throw error;
+  for (const { m } of ok) await react(a.ctx.api, m.chat.id, m.message_id, REACT.working);
 }
 
 export function createBot() {
@@ -183,7 +189,10 @@ export function createBot() {
         albums.set(m.media_group_id, entry);
         return;
       }
-      if ((file.file_size ?? 0) > TG_FILE_LIMIT) return ctx.reply(tr(ctx.user.lang).tooBig, { reply_parameters: { message_id: m.message_id } });
+      if ((file.file_size ?? 0) > TG_FILE_LIMIT) {
+        await react(ctx.api, m.chat.id, m.message_id, REACT.error);
+        return ctx.reply(tr(ctx.user.lang).tooBig, { reply_parameters: { message_id: m.message_id } });
+      }
       // A screenshot of a profile grid with «профиль» in the caption is analysed as a profile.
       const kind = file.input_kind === "screenshot" && parseHints(m.caption).profile ? "profile" : file.input_kind;
       return accept(ctx, { ...baseRow(m, ctx.user), input_kind: kind, tg_file_id: file.file_id, input: { file_id: file.file_id, mime: file.mime, file_size: file.file_size, text: m.caption } });
@@ -194,12 +203,15 @@ export function createBot() {
     const urls = extractUrls(text, m.entities ?? m.caption_entities);
     // Repeat: log it as a 'duplicate' row (repeats feed the future "what you keep coming back to"), tell how many times.
     const d = tr(ctx.user.lang);
+    // Repeat: 🤝 on the message; logged as a 'duplicate' row (feeds the future "what you keep coming back to").
+    // The "already saved" line only with /notify on.
     const dupReply = async (dup: Item, row: Partial<Item>) => {
-      const reply = await ctx.reply(duplicateText(d, dup), { ...html, reply_parameters: { message_id: m.message_id } });
+      await react(ctx.api, m.chat.id, m.message_id, REACT.repeat);
       try {
-        await insertItem({ ...baseRow(m, ctx.user), ...row, status: "duplicate", duplicate_of: dup.id, reply_message_id: reply.message_id } as Partial<Item>);
+        await insertItem({ ...baseRow(m, ctx.user), ...row, status: "duplicate", duplicate_of: dup.id } as Partial<Item>);
+        if (!ctx.user.notify) return;
         const { count } = await db.from("items").select("id", { count: "exact", head: true }).eq("user_id", ctx.user.id).eq("duplicate_of", dup.id);
-        if (count) await ctx.api.editMessageText(m.chat.id, reply.message_id, duplicateText(d, dup, count + 1), html);
+        await ctx.reply(duplicateText(d, dup, (count ?? 0) + 1), { ...html, reply_parameters: { message_id: m.message_id } });
       } catch (e) {
         console.warn("duplicate log failed", e);
       }
