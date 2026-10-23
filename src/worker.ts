@@ -4,7 +4,7 @@ import type { Part } from "@google/genai";
 import { config } from "./config.js";
 import { claimItems, db, findByHash, updateItem, type Item, type Similar } from "./db.js";
 import { analyze, embed, mediaPart, sleep, textPart, urlPart, type Analysis } from "./gemini.js";
-import { fetchTikTok, fetchVideoGeneric, fetchWebPage, fetchYouTubeText, updateYtdlp, type Fetched } from "./fetchers.js";
+import { fetchStats, fetchTikTok, fetchVideoGeneric, fetchWebPage, fetchYouTubeText, updateYtdlp, type Fetched } from "./fetchers.js";
 import { archiveCopy, archiveUpload } from "./archive.js";
 import { batchMessage, duplicateText, sourceLabel } from "./format.js";
 import { renderCard } from "./card.js";
@@ -58,7 +58,7 @@ async function processVideoLink(api: Api, it: Item, f: Fetched): Promise<Result>
   if (!hasMedia) parts.push(textPart("Видео не удалось скачать — опирайся только на подпись и автора."));
 
   const analysis = await analyze(parts);
-  const patch: Record<string, unknown> = { caption: f.caption, author: f.author, raw_meta: { via: f.via, log: f.log } };
+  const patch: Record<string, unknown> = { caption: f.caption, author: f.author, raw_meta: { via: f.via, log: f.log, stats: f.stats } };
   if (!it.occurred_at && f.date) patch.occurred_at = f.date;
   if (hasMedia) {
     const a = await safeArchive(() => archiveUpload(api, f, `${it.source_url}\n${analysis.title}`), patch);
@@ -81,16 +81,17 @@ async function processItem(api: Api, it: Item): Promise<Result> {
       return processVideoLink(api, it, await fetchVideoGeneric(it.source_url!));
 
     case "youtube": {
+      const stats = fetchStats(it.source_url!); // in parallel with Gemini
       try {
         const analysis = await analyze([textPart(contextText(it)), urlPart(it.source_url!)]);
-        return { analysis, patch: {}, status: "ok" };
+        return { analysis, patch: { raw_meta: { stats: await stats } }, status: "ok" };
       } catch (e) {
         console.warn(`youtube direct failed for ${it.id}, falling back to subs`, e);
         const y = await fetchYouTubeText(it.source_url!);
         const analysis = await analyze([textPart(contextText(it, {
           "Название": y.title, "Канал": y.author, "Описание": y.description?.slice(0, 3000), "Субтитры": y.subs,
         }))]);
-        return { analysis, patch: { author: y.author, caption: y.title }, status: "ok" };
+        return { analysis, patch: { author: y.author, caption: y.title, raw_meta: { stats: await stats } }, status: "ok" };
       }
     }
 

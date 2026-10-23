@@ -1,5 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 import { config } from "./config.js";
+import type { Stats } from "./fetchers.js";
 
 export const db = createClient(config.supabaseUrl, config.supabaseKey, {
   auth: { persistSession: false },
@@ -48,7 +49,7 @@ export type ItemInput = {
 export type NamedList = { title: string; items: string[] };
 export type Structured = { points?: string[]; ingredients?: string[]; steps?: string[]; lists?: NamedList[] };
 export type Similar = { id: number; summary: string | null; title: string | null; created_at: string; similarity: number };
-export type RawMeta = { via?: string; log?: string[]; archive_error?: string; similar?: Similar; en?: CardText };
+export type RawMeta = { via?: string; log?: string[]; archive_error?: string; similar?: Similar; en?: CardText; stats?: Stats };
 // Card content in one language — used for the English translation.
 export type CardText = { title: string; summary: string; structured: Structured };
 

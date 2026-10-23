@@ -18,8 +18,34 @@ export type Fetched = {
   author?: string;
   date?: string;
   subtitles?: string;
+  stats?: Stats;            // public counters at save time (SPEC §5.2)
   log: string[];            // what each path did, for /probe and errors
 };
+
+// Public counters as the platform shows them when the item is saved — can't be recovered later.
+export type Stats = {
+  source: "yt-dlp" | "tikwm";
+  captured_at: string;
+  view_count?: number;
+  like_count?: number;
+  comment_count?: number;
+  repost_count?: number;
+  published_at?: string;
+  author_followers?: number;
+  duration?: number;
+};
+
+const clean = <T extends object>(o: T) => Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined && v !== null)) as T;
+
+function statsFromYt(i: YtInfo): Stats {
+  const published = i.timestamp ? new Date(i.timestamp * 1000).toISOString()
+    : i.upload_date ? `${i.upload_date.slice(0, 4)}-${i.upload_date.slice(4, 6)}-${i.upload_date.slice(6, 8)}` : undefined;
+  return clean({
+    source: "yt-dlp" as const, captured_at: new Date().toISOString(),
+    view_count: i.view_count, like_count: i.like_count, comment_count: i.comment_count, repost_count: i.repost_count,
+    published_at: published, author_followers: i.channel_follower_count, duration: i.duration,
+  });
+}
 
 export async function withTmp<T>(fn: (dir: string) => Promise<T>): Promise<T> {
   await mkdir(config.tmpDir, { recursive: true });
@@ -51,7 +77,10 @@ async function readSubs(dir: string): Promise<string | undefined> {
 
 // ---------- yt-dlp ----------
 
-type YtInfo = { description?: string; title?: string; uploader?: string; creator?: string; channel?: string; timestamp?: number; vcodec?: string; duration?: number };
+type YtInfo = {
+  description?: string; title?: string; uploader?: string; creator?: string; channel?: string; timestamp?: number; vcodec?: string; duration?: number;
+  view_count?: number; like_count?: number; comment_count?: number; repost_count?: number; upload_date?: string; channel_follower_count?: number;
+};
 
 export async function ytdlp(url: string, dir: string, opts: { video: boolean }): Promise<{ info: YtInfo; file?: string; subs?: string }> {
   const args = [
@@ -113,6 +142,11 @@ async function tikwm(url: string) {
     caption: j.data.title as string | undefined,
     author: j.data.author?.unique_id as string | undefined,
     date: j.data.create_time ? new Date(j.data.create_time * 1000).toISOString() : undefined,
+    stats: clean<Stats>({
+      source: "tikwm", captured_at: new Date().toISOString(),
+      view_count: j.data.play_count, like_count: j.data.digg_count, comment_count: j.data.comment_count, repost_count: j.data.share_count,
+      published_at: j.data.create_time ? new Date(j.data.create_time * 1000).toISOString() : undefined, duration: j.data.duration,
+    }),
   };
 }
 
@@ -158,6 +192,7 @@ export async function fetchTikTok(inputUrl: string): Promise<Fetched> {
         meta({ caption: info.description || info.title, author: info.uploader || info.creator || info.channel,
           date: info.timestamp ? new Date(info.timestamp * 1000).toISOString() : undefined });
         out.subtitles = subs;
+        out.stats = statsFromYt(info);
         if (file && info.vcodec !== "none" && mimeByExt[extOf(file)]?.startsWith("video/")) {
           out.video = { buf: await readFile(file), mime: mimeByExt[extOf(file)] };
           out.via = "yt-dlp";
@@ -175,6 +210,7 @@ export async function fetchTikTok(inputUrl: string): Promise<Fetched> {
     try {
       const t = await tikwm(r.url);
       meta(t);
+      out.stats ??= t.stats;
       if (t.images.length) {
         out.images = await Promise.all(t.images.slice(0, 20).map(async (u) => ({ buf: await download(u), mime: "image/jpeg" })));
         out.via = "tikwm-images";
@@ -241,6 +277,7 @@ export async function fetchVideoGeneric(url: string): Promise<Fetched> {
       out.caption = info.description || info.title;
       out.author = info.uploader || info.channel;
       out.subtitles = subs;
+      out.stats = statsFromYt(info);
       if (file && mimeByExt[extOf(file)]) {
         out.video = { buf: await readFile(file), mime: mimeByExt[extOf(file)] };
         out.via = "yt-dlp";
@@ -250,6 +287,16 @@ export async function fetchVideoGeneric(url: string): Promise<Fetched> {
     }
     return out;
   });
+}
+
+// Metadata only (no download, no subs) — for counters of links that skip yt-dlp otherwise (YouTube goes to Gemini directly).
+export async function fetchStats(url: string): Promise<Stats | undefined> {
+  try {
+    const { stdout } = await run("yt-dlp", ["--no-warnings", "--no-playlist", "-j", "--skip-download", url], { timeout: 60_000, maxBuffer: 50 * 1024 * 1024 });
+    return statsFromYt(JSON.parse(stdout.trim().split("\n").pop()!) as YtInfo);
+  } catch (e) {
+    console.warn("stats failed", errMsg(e));
+  }
 }
 
 export async function fetchYouTubeText(url: string): Promise<{ title?: string; description?: string; author?: string; subs?: string; duration?: number }> {
