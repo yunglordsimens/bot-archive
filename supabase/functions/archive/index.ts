@@ -82,14 +82,22 @@ Deno.serve(async (req) => {
   }
   const tgId = await verify(body.initData ?? "");
   if (!tgId) return json({ error: (await getBotId()) ? "auth" : "no_bot_id" }, 401);
-  const { data: user } = await db.from("users").select("id, name, lang, projects, archive_channel_id").eq("telegram_user_id", tgId).maybeSingle();
+  const { data: user } = await db.from("users").select("id, name, display_name, lang, projects, archive_channel_id").eq("telegram_user_id", tgId).maybeSingle();
   if (!user) return json({ error: "not_allowed" }, 403);
 
   switch (body.action) {
     case "init": {
       const { data: facets, error } = await db.rpc("archive_facets", { uid: user.id });
       if (error) return json({ error: error.message }, 500);
-      return json({ user: { name: user.name, lang: user.lang, projects: user.projects ? Object.keys(user.projects) : null }, facets, search: !!GEMINI_KEY });
+      return json({ user: { name: user.name, display_name: user.display_name, lang: user.lang, projects: user.projects ? Object.keys(user.projects) : null }, facets, search: !!GEMINI_KEY });
+    }
+
+    // The header name (SPEC §8); empty = back to the name from Telegram.
+    case "name": {
+      const name = typeof body.value === "string" ? body.value.trim().slice(0, 40) : "";
+      const { error } = await db.from("users").update({ display_name: name || null }).eq("id", user.id);
+      if (error) return json({ error: error.message }, 500);
+      return json({ display_name: name || null });
     }
 
     case "feed": {
@@ -118,7 +126,7 @@ Deno.serve(async (req) => {
 
     case "item": {
       const { data: it } = await db.from("items")
-        .select("id, created_at, occurred_at, input_kind, origin, source_url, status, author, caption, title, summary, content_type, theme, project, why_me, visual_description, value_in, stance, comments_note, hook, my_note, tags, structured, raw_text, archive_link, raw_meta, for_blog, preview_path, language")
+        .select("id, created_at, occurred_at, input_kind, origin, source_url, status, author, caption, title, summary, content_type, theme, project, why_me, why_tags, visual_description, value_in, stance, comments_note, hook, my_note, tags, structured, raw_text, archive_link, raw_meta, for_blog, preview_path, language")
         .eq("user_id", user.id).eq("id", Number(body.id)).maybeSingle();
       if (!it) return json({ error: "not_found" }, 404);
       const urls = await signed([it.preview_path]);

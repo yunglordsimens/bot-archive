@@ -1,10 +1,8 @@
 import { InputFile, type Api } from "grammy";
-import { config } from "./config.js";
+import { config, TG_UPLOAD_LIMIT } from "./config.js";
 import { tr } from "./i18n/index.js";
 import type { User } from "./users.js";
 import type { Media } from "./fetchers.js";
-
-const BOT_UPLOAD_LIMIT = 50 * 1024 * 1024;
 
 // The user's own archive channel (set when they make the bot admin there). The owner may also set ARCHIVE_CHANNEL_ID.
 export function archiveChannel(u: User): number | undefined {
@@ -37,7 +35,7 @@ export async function archiveUpload(
   media: { video?: Media; images?: Media[] },
   caption: string,
 ): Promise<{ fileIds: string[]; link?: string }> {
-  if (media.video && media.video.buf.length < BOT_UPLOAD_LIMIT) {
+  if (media.video && media.video.buf.length < TG_UPLOAD_LIMIT) {
     const m = await api.sendVideo(ch, new InputFile(media.video.buf, "video.mp4"), { caption, parse_mode: "HTML", supports_streaming: true });
     return { fileIds: [m.video.file_id], link: link(ch, m.message_id) };
   }

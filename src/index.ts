@@ -7,9 +7,9 @@ import { DICTS, LANGS, tr } from "./i18n/index.js";
 import { ensureOwner, listUsers } from "./users.js";
 import { setCommands } from "./ui.js";
 import { backfillPreviews } from "./preview.js";
+import { prepareBotApi, startBotApiCleanup } from "./botapi.js";
 
 const bot = createBot();
-await bot.init();
 
 // Fail loudly (in Telegram too) if the database key is wrong.
 const { error: dbError } = await db.from("users").select("id").limit(1);
@@ -19,6 +19,10 @@ if (dbError) {
   await bot.api.sendMessage(config.ownerId, text).catch(() => {});
   process.exit(2); // config error: start-mac.sh stops instead of restarting
 }
+
+// Local Bot API server (BOT_API_URL): check it's up and log out of the cloud once, before the bot starts polling.
+await prepareBotApi();
+await bot.init();
 
 const owner = await ensureOwner();
 // The Mini App's Edge Function checks initData signatures against this bot's id (not secret; the token stays here).
@@ -41,6 +45,9 @@ else if (a) {
   await bot.api.sendMessage(owner.telegram_user_id, tr(owner.lang).ui.channelBad(a.problem ?? "")).catch(() => {});
 }
 
+// Copies of received files on the Mac: older than BOT_API_KEEP_DAYS are deleted (originals stay in the channel).
+startBotApiCleanup();
+
 // Preview frames for items saved before the Mini App (one by one, in the background).
 backfillPreviews(bot.api).catch((e) => console.warn("preview backfill stopped:", e?.message ?? e));
 
@@ -49,7 +56,8 @@ startWorker(bot.api).catch((e) => {
   process.exit(1);
 });
 
-for (const sig of ["SIGINT", "SIGTERM"] as const) process.once(sig, () => bot.stop());
+// On Ctrl+C the local Bot API server stops at the same moment: its last getUpdates may fail — not worth a stack trace.
+for (const sig of ["SIGINT", "SIGTERM"] as const) process.once(sig, () => void bot.stop().catch((e) => console.warn("stop:", e?.description ?? e?.message ?? e)));
 
 await bot.start({
   allowed_updates: ["message", "callback_query", "my_chat_member"],

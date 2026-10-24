@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
 import type { Api } from "grammy";
 import type { Part } from "@google/genai";
 import { config } from "./config.js";
@@ -8,9 +10,14 @@ import { parseHints, type Hints } from "./hints.js";
 
 // Shared by the worker, /reprocess and card buttons: Telegram downloads, context for Gemini, deep format analysis.
 
+// The local server (--local) answers getFile with an absolute path in its data folder instead of a download URL.
+const SERVER_DIR = "/var/lib/telegram-bot-api";
+export const localFile = (path: string) => (path.startsWith(SERVER_DIR) ? join(resolve(config.botApiDir), path.slice(SERVER_DIR.length)) : path);
+
 export async function tgDownload(api: Api, fileId: string): Promise<Buffer> {
   const f = await api.getFile(fileId);
-  const res = await fetch(`https://api.telegram.org/file/bot${config.botToken}/${f.file_path}`);
+  if (f.file_path?.startsWith("/")) return readFile(localFile(f.file_path));
+  const res = await fetch(`${config.botApiUrl ?? "https://api.telegram.org"}/file/bot${config.botToken}/${f.file_path}`);
   if (!res.ok) throw new Error(`tg file HTTP ${res.status}`);
   return Buffer.from(await res.arrayBuffer());
 }

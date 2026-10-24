@@ -17,6 +17,7 @@ export const en: Dict = {
     format_idea: "🧪 format idea", seen_before: "👀 seen before", example: "🔖 example", interesting: "🤔 interesting",
   },
   value: { info: "📚 info", visual: "🖼 visual", audio: "🎧 audio", format: "🎬 format", meta: "🧠 meta" },
+  whyTags: { asset: "🧱 asset", strategy: "♟ strategy", ofst: "📰 OFST", content: "🎬 for content", interesting: "🤔 interesting" },
   defaultThemes: ["typography & fonts", "design references", "hooks & marketing", "money & business ideas", "code & tools", "study", "recipes", "funny", "misc"],
   defaultProjects: ["work", "study", "business ideas", "creative", "health & home", "misc"],
 
@@ -29,8 +30,9 @@ export const en: Dict = {
 
   btn: { recent: "🕘 Recent", projects: "🧭 Areas", themes: "🗂 Topics", types: "🏷 Types", status: "📊 Status", help: "❓ Help" },
   accepted: "received",
-  tooBig: "too big (>20 MB) — can't process",
-  tooBigN: (n) => `${n} too big (>20 MB)`,
+  tooBig: (limit) => `too big (>${limit}) — can't process`,
+  tooBigN: (n, limit) => `${n} too big (>${limit})`,
+  units: { mb: "MB", gb: "GB" },
   dbDown: (hint) => `❌ not saved: database unavailable (${hint})`,
   dbBadKey: "wrong SUPABASE_SERVICE_ROLE_KEY in .env",
   unknownCommand: "unknown command — see /help",
@@ -49,10 +51,12 @@ export const en: Dict = {
     json: "the model returned an unreadable answer", network: "no connection", unknown: "unknown error", other: (e) => `error: ${e}`,
   },
   failed: (reason) => `⚠️ couldn't analyse — ${reason}\nlink saved · tap 🔁 or /retry`,
-  batch: { already: (n) => `${n} already saved`, notParsed: (n) => `${n} not analysed`, saved: "saved", failedList: (r) => `⚠️ not analysed: ${r} · /retry` },
+  noPost: (reason) => `⚠️ saved, but there is no post in the archive channel — ${reason}`,
+  noChannel: "archive channel not connected: add the bot as an admin to a private channel",
+  batch: { already: (n) => `${n} already saved`, notParsed: (n) => `${n} not analysed`, saved: "saved", failedList: (r) => `⚠️ not analysed: ${r} · /retry`, noPost: (n) => `⚠️ ${n} without a channel post` },
 
   card: {
-    more: "📖 More", less: "🔼 Less", transcript: "📜 Transcript", retry: "🔁 Retry", edit: "✏️ Correct",
+    more: "📖 More", less: "🔼 Less", transcript: "📜 Transcript", retry: "🔁 Retry", repost: "📤 Post to channel", reposted: "📤 posted to the channel", repostFailed: (e) => `⚠️ couldn't post: ${e}`, edit: "✏️ Correct",
     formatShow: "🎬 Format", formatRun: "🎬 Analyse format", back: "← Back",
     points: "Key points", ingredients: "Ingredients", steps: "Steps", why: "Why me", inFrame: "In the frame", move: "Trick",
     comments: "In the comments", similar: "similar to", moreItems: (n) => `… ${n} more`, tooLong: "(full text — in “Transcript”)",
@@ -154,6 +158,7 @@ Try again or word it differently.`,
   menuButton: "Archive",
   commands: {
     retry: "retry errors and items without video", resort: "re-sort: describe how you want it",
+    reprocess: "bring old items and posts to the current format",
     lang: "language", notify: "a line with a link to the post after saving", help: "how to use",
   },
 };

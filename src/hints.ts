@@ -2,6 +2,8 @@
 
 export const VALUE_IN = ["info", "visual", "audio", "format", "meta"] as const;
 export const STANCES = ["like", "dislike", "anti_example", "replicate", "format_idea", "seen_before", "example", "interesting"] as const;
+// «Зачем мне» labels (SPEC §3): how the item can be used. "ofst" only for users who have an OFST area.
+export const WHY_TAGS = ["asset", "strategy", "ofst", "content", "interesting"] as const;
 
 const VALUE_WORDS: [RegExp, (typeof VALUE_IN)[number]][] = [
   [/инф[аоу]|ради инфы|полезн|informac|\binfo\b|thông tin/i, "info"],

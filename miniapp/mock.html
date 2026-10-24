@@ -1,0 +1,16 @@
+<!doctype html>
+<!-- Dev only (npm run dev → /mock.html): the Mini App outside Telegram with a fake Telegram object and fake API answers.
+     ?theme=light — light Telegram theme. Not part of the build (vite builds index.html only). -->
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="light dark" />
+    <title>Архив (mock)</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/mock.ts"></script>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

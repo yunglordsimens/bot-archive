@@ -17,6 +17,7 @@ export const cs: Dict = {
     format_idea: "🧪 nápad na formát", seen_before: "👀 už jsem viděl(a)", example: "🔖 příklad", interesting: "🤔 zajímavé",
   },
   value: { info: "📚 info", visual: "🖼 obraz", audio: "🎧 zvuk", format: "🎬 formát", meta: "🧠 meta" },
+  whyTags: { asset: "🧱 zdroj", strategy: "♟ strategie", ofst: "📰 OFST", content: "🎬 na obsah", interesting: "🤔 zajímavé" },
   defaultThemes: ["typografie a písma", "designové reference", "háčky a marketing", "peníze a byznys nápady", "kód a nástroje", "studium", "recepty", "vtipné", "různé"],
   defaultProjects: ["práce", "škola", "podnikání", "tvorba", "zdraví a domácnost", "různé"],
 
@@ -29,8 +30,9 @@ export const cs: Dict = {
 
   btn: { recent: "🕘 Poslední", projects: "🧭 Oblasti", themes: "🗂 Témata", types: "🏷 Typy", status: "📊 Stav", help: "❓ Nápověda" },
   accepted: "přijato",
-  tooBig: "příliš velké (>20 MB) — nejde zpracovat",
-  tooBigN: (n) => `${n} příliš velké (>20 MB)`,
+  tooBig: (limit) => `příliš velké (>${limit}) — nejde zpracovat`,
+  tooBigN: (n, limit) => `${n} příliš velké (>${limit})`,
+  units: { mb: "MB", gb: "GB" },
   dbDown: (hint) => `❌ neuloženo: databáze není dostupná (${hint})`,
   dbBadKey: "špatný SUPABASE_SERVICE_ROLE_KEY v .env",
   unknownCommand: "neznámý příkaz — seznam v /help",
@@ -49,10 +51,12 @@ export const cs: Dict = {
     json: "model vrátil nesrozumitelnou odpověď", network: "není spojení", unknown: "neznámá chyba", other: (e) => `chyba: ${e}`,
   },
   failed: (reason) => `⚠️ nepodařilo se rozebrat — ${reason}\nodkaz je uložený · klepni na 🔁 nebo /retry`,
-  batch: { already: (n) => `${n} už bylo`, notParsed: (n) => `${n} nerozebráno`, saved: "uloženo", failedList: (r) => `⚠️ nerozebráno: ${r} · /retry` },
+  noPost: (reason) => `⚠️ uloženo, ale v archivním kanálu chybí příspěvek — ${reason}`,
+  noChannel: "archivní kanál není připojen: přidej bota jako admina do soukromého kanálu",
+  batch: { already: (n) => `${n} už bylo`, notParsed: (n) => `${n} nerozebráno`, saved: "uloženo", failedList: (r) => `⚠️ nerozebráno: ${r} · /retry`, noPost: (n) => `⚠️ ${n} bez příspěvku v kanálu` },
 
   card: {
-    more: "📖 Víc", less: "🔼 Méně", transcript: "📜 Přepis", retry: "🔁 Znovu", edit: "✏️ Opravit",
+    more: "📖 Víc", less: "🔼 Méně", transcript: "📜 Přepis", retry: "🔁 Znovu", repost: "📤 Zveřejnit v kanálu", reposted: "📤 zveřejněno v kanálu", repostFailed: (e) => `⚠️ nepodařilo se zveřejnit: ${e}`, edit: "✏️ Opravit",
     formatShow: "🎬 Formát", formatRun: "🎬 Rozebrat formát", back: "← Zpět",
     points: "Body", ingredients: "Suroviny", steps: "Postup", why: "Proč pro mě", inFrame: "V záběru", move: "Trik",
     comments: "V komentářích", similar: "podobné jako", moreItems: (n) => `… a dalších ${n}`, tooLong: "(celé znění — v „Přepisu“)",
@@ -154,6 +158,7 @@ Zkus to znovu nebo jinak.`,
   menuButton: "Archiv",
   commands: {
     retry: "zopakovat chyby a záznamy bez videa", resort: "přetřídit: popiš slovy, jak chceš",
+    reprocess: "převést staré záznamy a příspěvky na nový formát",
     lang: "jazyk", notify: "řádek s odkazem na příspěvek po uložení", help: "jak používat",
   },
 };

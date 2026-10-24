@@ -1,7 +1,7 @@
 import { InputFile, type Api } from "grammy";
 import type { Item } from "./db.js";
 import { archiveChannel, archiveUpload, link } from "./archive.js";
-import { esc, typeLabel } from "./format.js";
+import { esc, typeLabel, whyBlock } from "./format.js";
 import { splitMessages } from "./split.js";
 import { fmtDate, tr, type Dict } from "./i18n/index.js";
 import type { User } from "./users.js";
@@ -21,12 +21,15 @@ const visible = (html: string) => html.replace(/<[^>]+>/g, "").replace(/&(lt|gt|
 
 const fmtNum = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}K` : String(n));
 
-// "@author (link to profile) · 📅 date of the original · source"
+// "Name (@handle) (link to profile) · 👥 12.3K · 📅 date of the original · source"
 function authorLine(d: Dict, it: Item) {
+  const a = it.raw_meta?.author;
   const who = it.author ?? it.origin_detail;
-  const handle = who ? (/\s/.test(who) ? who : `@${who.replace(/^@/, "")}`) : "";
-  const url = it.raw_meta?.author_url;
-  const author = handle ? (url ? `<a href="${url}">${esc(handle)}</a>` : esc(handle)) : "";
+  const at = (h: string) => (/\s/.test(h) ? h : `@${h.replace(/^@/, "")}`);
+  const handle = a?.handle && a.name && a.name !== a.handle ? `${a.name} (@${a.handle})` : a?.handle ? `@${a.handle}` : a?.name ?? (who ? at(who) : "");
+  const url = a?.url ?? it.raw_meta?.author_url;
+  const author = [handle ? (url ? `<a href="${url}">${esc(handle)}</a>` : esc(handle)) : "",
+    a?.followers != null ? `👥 ${d.post.followers(fmtNum(a.followers))}` : ""].filter(Boolean).join(" · ");
   const date = it.raw_meta?.published_at ?? it.raw_meta?.stats?.published_at ?? it.occurred_at;
   const published = date ? fmtDate(d, date, true) : "";
   const src = it.source_url && it.input_kind !== "profile" ? `<a href="${it.source_url}">${d.post.source}</a>` : "";
@@ -67,7 +70,7 @@ export function cardBlocks(it: Item, u: User): string[] {
   return [
     visible(header) > CAPTION_MAX ? header : "",
     esc(it.summary ?? ""),
-    it.why_me ? `💭 <b>${d.post.why}</b>\n${esc(it.why_me)}` : "",
+    whyBlock(d, d.post.why, it),
     section(d.card.points, s.points),
     section(d.card.ingredients, s.ingredients),
     section(d.card.steps, s.steps, true),

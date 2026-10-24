@@ -6,9 +6,11 @@ export type S = {
   description: string; transcript: string; format: string; tags: string; reset: string; byMeaning: string;
   openInTelegram: string; notAllowed: string; noBotId: string; authFailed: string; failed: string; retry: string;
   projects: string; themes: string; items: (n: number) => string;
+  source: string; save: string; namePlaceholder: string;
 };
 
 const ru: S = {
+  source: "Источник", save: "Сохранить", namePlaceholder: "Имя в шапке (пусто — из Telegram)",
   title: "Архив", feed: "Лента", topics: "Темы", search: "Поиск — по смыслу и словам", searching: "ищу…", nothing: "ничего нет", more: "Ещё",
   all: "все", filters: { project: "Направление", theme: "Тема", type: "Тип", value_in: "Ценность", stance: "Отношение", source: "Источник" },
   blog: "В блог", inBlog: "★ в блоге", toBlog: "☆ В блог", original: "Оригинал ↗", inChannel: "В канале ↗", summary: "Суть", en: "English",
@@ -19,6 +21,7 @@ const ru: S = {
   items: (n) => `${n} ${pl("ru", n, ["запись", "записи", "записей"])}`,
 };
 const cs: S = {
+  source: "Zdroj", save: "Uložit", namePlaceholder: "Jméno v záhlaví (prázdné — z Telegramu)",
   title: "Archiv", feed: "Přehled", topics: "Témata", search: "Hledat — podle smyslu i slov", searching: "hledám…", nothing: "nic tu není", more: "Další",
   all: "vše", filters: { project: "Oblast", theme: "Téma", type: "Typ", value_in: "Hodnota", stance: "Postoj", source: "Zdroj" },
   blog: "Do blogu", inBlog: "★ v blogu", toBlog: "☆ Do blogu", original: "Originál ↗", inChannel: "V kanálu ↗", summary: "Podstata", en: "English",
@@ -29,6 +32,7 @@ const cs: S = {
   items: (n) => `${n} ${pl("cs", n, ["záznam", "záznamy", "záznamů"])}`,
 };
 const en: S = {
+  source: "Source", save: "Save", namePlaceholder: "Name in the header (empty — from Telegram)",
   title: "Archive", feed: "Feed", topics: "Topics", search: "Search — by meaning and words", searching: "searching…", nothing: "nothing here", more: "More",
   all: "all", filters: { project: "Area", theme: "Topic", type: "Type", value_in: "Value", stance: "Attitude", source: "Source" },
   blog: "For blog", inBlog: "★ in blog", toBlog: "☆ For blog", original: "Original ↗", inChannel: "In channel ↗", summary: "Gist", en: "English",
@@ -39,6 +43,7 @@ const en: S = {
   items: (n) => `${n} ${n === 1 ? "item" : "items"}`,
 };
 const vi: S = {
+  source: "Nguồn", save: "Lưu", namePlaceholder: "Tên trên đầu trang (trống — lấy từ Telegram)",
   title: "Lưu trữ", feed: "Dòng thời gian", topics: "Chủ đề", search: "Tìm — theo nghĩa và theo từ", searching: "đang tìm…", nothing: "chưa có gì", more: "Thêm",
   all: "tất cả", filters: { project: "Lĩnh vực", theme: "Chủ đề", type: "Loại", value_in: "Giá trị", stance: "Thái độ", source: "Nguồn" },
   blog: "Cho blog", inBlog: "★ trong blog", toBlog: "☆ Cho blog", original: "Bản gốc ↗", inChannel: "Trong kênh ↗", summary: "Ý chính", en: "English",

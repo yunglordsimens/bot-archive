@@ -2,7 +2,7 @@ import { InlineKeyboard, InputFile, type Api, type Bot, type CallbackQueryContex
 import { db, updateItem, type Hook, type Item, type Similar, type Structured } from "./db.js";
 import { STANCES, VALUE_IN } from "./hints.js";
 import { addFormatAnalysis, originalMedia } from "./analysis.js";
-import { esc, resultMessage } from "./format.js";
+import { esc, resultMessage, whyBlock } from "./format.js";
 import { translateCard } from "./gemini.js";
 import { DICTS, fmtDate, tr, type Dict } from "./i18n/index.js";
 import { splitMessages } from "./split.js";
@@ -90,7 +90,7 @@ export function renderCard(it: Item, mode: Mode, u: User): { text: string; kb: I
     blocks = [
       `<b>${resultMessage(d, it, misc)}</b>${similar}`,
       esc(it.summary ?? ""),
-      it.why_me ? `💭 <b>${d.card.why}</b>\n${esc(it.why_me)}` : "",
+      whyBlock(d, d.card.why, it),
       it.visual_description ? `🎞 <b>${d.card.inFrame}</b>\n${esc(it.visual_description)}` : "",
       it.hook?.reusable_move ? `🎬 <b>${d.card.move}</b>\n${esc(it.hook.reusable_move)}` : "",
       ...details(d, it.structured),

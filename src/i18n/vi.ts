@@ -17,6 +17,7 @@ export const vi: Dict = {
     format_idea: "🧪 ý tưởng định dạng", seen_before: "👀 đã thấy rồi", example: "🔖 ví dụ", interesting: "🤔 thú vị",
   },
   value: { info: "📚 thông tin", visual: "🖼 hình ảnh", audio: "🎧 âm thanh", format: "🎬 định dạng", meta: "🧠 meta" },
+  whyTags: { asset: "🧱 tài nguyên", strategy: "♟ chiến lược", ofst: "📰 OFST", content: "🎬 cho nội dung", interesting: "🤔 thú vị" },
   defaultThemes: ["kiểu chữ & phông chữ", "tham khảo thiết kế", "hook & marketing", "tiền & ý tưởng kinh doanh", "code & công cụ", "học tập", "công thức nấu ăn", "hài hước", "khác"],
   defaultProjects: ["công việc", "học tập", "ý tưởng kinh doanh", "sáng tạo", "sức khỏe & gia đình", "khác"],
 
@@ -29,8 +30,9 @@ export const vi: Dict = {
 
   btn: { recent: "🕘 Gần đây", projects: "🧭 Lĩnh vực", themes: "🗂 Chủ đề", types: "🏷 Loại", status: "📊 Trạng thái", help: "❓ Trợ giúp" },
   accepted: "đã nhận",
-  tooBig: "quá lớn (>20 MB) — không xử lý được",
-  tooBigN: (n) => `${n} quá lớn (>20 MB)`,
+  tooBig: (limit) => `quá lớn (>${limit}) — không xử lý được`,
+  tooBigN: (n, limit) => `${n} quá lớn (>${limit})`,
+  units: { mb: "MB", gb: "GB" },
   dbDown: (hint) => `❌ chưa lưu: cơ sở dữ liệu không truy cập được (${hint})`,
   dbBadKey: "SUPABASE_SERVICE_ROLE_KEY trong .env không đúng",
   unknownCommand: "lệnh không xác định — xem /help",
@@ -49,10 +51,12 @@ export const vi: Dict = {
     json: "mô hình trả về câu trả lời khó hiểu", network: "mất kết nối", unknown: "lỗi không xác định", other: (e) => `lỗi: ${e}`,
   },
   failed: (reason) => `⚠️ không phân tích được — ${reason}\nđã lưu liên kết · bấm 🔁 hoặc /retry`,
-  batch: { already: (n) => `${n} đã có`, notParsed: (n) => `${n} chưa phân tích được`, saved: "đã lưu", failedList: (r) => `⚠️ chưa phân tích được: ${r} · /retry` },
+  noPost: (reason) => `⚠️ đã lưu, nhưng chưa có bài trong kênh lưu trữ — ${reason}`,
+  noChannel: "chưa kết nối kênh lưu trữ: thêm bot làm quản trị viên của một kênh riêng tư",
+  batch: { already: (n) => `${n} đã có`, notParsed: (n) => `${n} chưa phân tích được`, saved: "đã lưu", failedList: (r) => `⚠️ chưa phân tích được: ${r} · /retry`, noPost: (n) => `⚠️ ${n} chưa có bài trong kênh` },
 
   card: {
-    more: "📖 Chi tiết", less: "🔼 Thu gọn", transcript: "📜 Bản ghi", retry: "🔁 Thử lại", edit: "✏️ Sửa",
+    more: "📖 Chi tiết", less: "🔼 Thu gọn", transcript: "📜 Bản ghi", retry: "🔁 Thử lại", repost: "📤 Đăng lên kênh", reposted: "📤 đã đăng lên kênh", repostFailed: (e) => `⚠️ không đăng được: ${e}`, edit: "✏️ Sửa",
     formatShow: "🎬 Định dạng", formatRun: "🎬 Phân tích định dạng", back: "← Quay lại",
     points: "Ý chính", ingredients: "Nguyên liệu", steps: "Các bước", why: "Có ích gì cho tôi", inFrame: "Trong khung hình", move: "Thủ thuật",
     comments: "Trong bình luận", similar: "giống với", moreItems: (n) => `… còn ${n}`, tooLong: "(toàn văn — trong “Bản ghi”)",
@@ -154,6 +158,7 @@ Thử lại hoặc diễn đạt khác.`,
   menuButton: "Lưu trữ",
   commands: {
     retry: "thử lại lỗi và mục chưa có video", resort: "sắp xếp lại: mô tả bằng lời",
+    reprocess: "cập nhật bản ghi và bài cũ sang định dạng mới",
     lang: "ngôn ngữ", notify: "một dòng có liên kết tới bài sau khi lưu", help: "cách dùng",
   },
 };

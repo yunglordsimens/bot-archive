@@ -6,9 +6,10 @@ import { claimItems, db, findByHash, FORMAT_VERSION, updateItem, type Item, type
 import { analyze, embed, mediaPart, sleep, textPart, translateCard, urlPart, type Analysis } from "./gemini.js";
 import { needsFormatAnalysis, parseHints } from "./hints.js";
 import { addFormatAnalysis, contextText, tgDownload } from "./analysis.js";
-import { fetchComments, fetchMeta, fetchProfile, fetchTikTok, fetchVideoGeneric, fetchWebPage, fetchYouTubeText, profileHandle, resolveTikTok, updateYtdlp, type Fetched } from "./fetchers.js";
+import { authorInfo, fetchComments, fetchMeta, fetchProfile, fetchTikTok, fetchVideoGeneric, fetchWebPage, fetchYouTubeText, profileHandle, resolveTikTok, updateYtdlp, type Fetched } from "./fetchers.js";
 import { postCard, postTranscript, publishToChannel, type Publish } from "./channel.js";
-import { batchMessage, duplicateText, failedText } from "./format.js";
+import { batchMessage, duplicateText, errorReason, esc, failedText } from "./format.js";
+import { archiveChannel } from "./archive.js";
 import { react, REACT } from "./reactions.js";
 import { tr, type Dict } from "./i18n/index.js";
 import { getUserById, miscProject, profileOf, type User } from "./users.js";
@@ -56,9 +57,10 @@ async function processVideoLink(api: Api, it: Item, u: User, f: Fetched, comment
   await stage(api, it, d, hasMedia ? (f.images?.length ? d.stage.thinkImages : d.stage.thinkVideo) : d.stage.noVideo);
   if (!hasMedia) parts.push(textPart("Видео не удалось скачать — опирайся только на подпись и автора."));
 
-  const analysis = await analyze(parts, profileOf(u));
+  const [analysis, author] = await Promise.all([analyze(parts, profileOf(u)), authorInfo(it.source_url!, f)]);
   const patch: Record<string, unknown> = { caption: f.caption, author: f.author, raw_meta: {
-    via: f.via, log: f.log, stats: f.stats, comments, author_url: f.authorUrl ?? profileUrl(it.origin, f.author), published_at: f.stats?.published_at ?? f.date,
+    via: f.via, log: f.log, stats: f.stats, comments, author, author_url: author?.url ?? f.authorUrl ?? profileUrl(it.origin, f.author),
+    published_at: f.stats?.published_at ?? f.date,
   } };
   if (!it.occurred_at && f.date) patch.occurred_at = f.date;
   if (hasMedia) patch.next_retry_at = null;
@@ -90,7 +92,8 @@ async function processItem(api: Api, it: Item, u: User): Promise<Result> {
       const comments = await fetchComments(it.source_url!, "youtube");
       const ytPatch = async () => {
         const m = await meta;
-        return { author: m?.author, raw_meta: { stats: m?.stats, comments, author_url: m?.authorUrl, published_at: m?.stats?.published_at } };
+        const author = m && await authorInfo(it.source_url!, m);
+        return { author: m?.author, raw_meta: { stats: m?.stats, comments, author, author_url: author?.url ?? m?.authorUrl, published_at: m?.stats?.published_at } };
       };
       try {
         const media = [urlPart(it.source_url!)];
@@ -164,6 +167,11 @@ async function processProfile(api: Api, it: Item, u: User): Promise<Result> {
   return { analysis, patch, status: "ok", publish: media.length ? { kind: "copy" } : undefined, media, thumb };
 }
 
+// Saved, but the archive post didn't go out (no channel, no rights, Telegram error) — the user must hear about it,
+// otherwise 👌 looks like everything is in the channel.
+const noPost = (it: Item) => (it.status === "ok" || it.status === "pending_media") && !it.archive_link;
+const noPostReason = (d: Dict, it: Item, u: User) => (archiveChannel(u) ? errorReason(d, it.raw_meta?.archive_error) : d.noChannel);
+
 // Albums already reported (one message per album, even if two photos finish at the same moment).
 const batchesDone = new Set<string>();
 
@@ -182,15 +190,21 @@ async function finishReply(api: Api, it: Item, u: User) {
     if (batch.some((b) => b.status === "queued" || b.status === "processing") || batchesDone.has(it.batch_id)) return;
     batchesDone.add(it.batch_id);
     const failed = batch.filter((b) => b.status === "failed");
-    if (failed.length || u.notify) await send(batchMessage(d, batch, miscProject(u)), { reply_parameters: { message_id: batch[0].tg_message_id, allow_sending_without_reply: true } });
+    const lost = batch.filter(noPost);
+    let text = batchMessage(d, batch, miscProject(u));
+    if (lost.length) text += `\n${d.batch.noPost(lost.length)} — ${esc(noPostReason(d, lost[0], u))} · /reprocess`;
+    if (failed.length || lost.length || u.notify) await send(text, { reply_parameters: { message_id: batch[0].tg_message_id, allow_sending_without_reply: true } });
     return;
   }
   if (it.status === "failed") return void send(failedText(d, it), { reply_markup: new InlineKeyboard().text(d.card.retry, `retry:${it.id}`) });
+  const postNote = noPost(it) ? d.noPost(esc(noPostReason(d, it, u))) : "";
+  const repostKb = (kb: InlineKeyboard) => (postNote && archiveChannel(u) ? kb.text(d.card.repost, `repost:${it.id}`) : kb);
   if (it.status === "pending_media") {
     // Saved without the video — worth a short note even with /notify off.
-    return void send(`${d.pendingNote}${it.archive_link ? ` · <a href="${it.archive_link}">${d.inArchive}</a>` : ""}`,
-      { reply_markup: new InlineKeyboard().text(d.card.retry, `retry:${it.id}`) });
+    return void send(`${d.pendingNote}${it.archive_link ? ` · <a href="${it.archive_link}">${d.inArchive}</a>` : ""}${postNote && `\n${postNote}`}`,
+      { reply_markup: repostKb(new InlineKeyboard().text(d.card.retry, `retry:${it.id}`)) });
   }
+  if (postNote) return void send(postNote, { reply_markup: repostKb(new InlineKeyboard()) });
   if (!u.notify) return;
   if (it.status === "duplicate") {
     const { data } = await db.from("items").select("title, summary, created_at, archive_link").eq("id", it.duplicate_of!).single();
@@ -214,7 +228,7 @@ export async function nearest(embedding: string, id: number, uid: number): Promi
 export async function applyAnalysis(it: Item, a: Analysis, patch: Record<string, unknown>, u: User) {
   const hints = parseHints(it.input?.text);
   Object.assign(patch, {
-    title: a.title, summary: a.summary, content_type: a.content_type, kind: a.kind, why_me: a.why_me,
+    title: a.title, summary: a.summary, content_type: a.content_type, kind: a.kind, why_me: a.why_me, why_tags: a.why_tags,
     visual_description: a.visual_description, comments_note: a.comments_note || null,
     // Caption hints beat the model's guess.
     value_in: hints.value_in.length ? hints.value_in : a.value_in, stance: hints.stance ?? a.stance,
@@ -246,6 +260,21 @@ async function publishItem(api: Api, it: Item, patch: Record<string, unknown>, p
   if (card) patch.raw_meta = { ...(patch.raw_meta as RawMeta), card_links: card.links };
   const transcript = await postTranscript(api, { ...full, archive_link: posted.link }, posted.link, u).catch((e) => void console.warn("transcript post failed", e));
   if (transcript) patch.raw_meta = { ...(patch.raw_meta as RawMeta), transcript_link: transcript };
+}
+
+// "📤 Post to channel" for an item saved without a post; TikTok / Reels are downloaded again (the video was never kept).
+export async function republish(api: Api, it: Item, u: User): Promise<string> {
+  let pub: Publish;
+  if (it.input?.file_id) pub = { kind: "copy" };
+  else if (!it.archive_file_ids?.length && it.source_url && (it.input_kind === "tiktok" || it.origin === "instagram")) {
+    const f = it.input_kind === "tiktok" ? await fetchTikTok(it.source_url) : await fetchVideoGeneric(it.source_url);
+    if (f.video || f.images?.length) pub = { kind: "upload", video: f.video, images: f.images };
+  }
+  const patch: Record<string, unknown> = { raw_meta: { ...it.raw_meta, archive_error: undefined, card_links: undefined, transcript_link: undefined } };
+  await publishItem(api, it, patch, pub, u);
+  await updateItem(it.id, patch);
+  if (!patch.archive_link) throw new Error((patch.raw_meta as RawMeta).archive_error ?? "no post");
+  return patch.archive_link as string;
 }
 
 const MAX_TRANSIENT_ATTEMPTS = 4;

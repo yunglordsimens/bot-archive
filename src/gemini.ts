@@ -1,7 +1,7 @@
 import { GoogleGenAI, Type, type Part } from "@google/genai";
 import { config } from "./config.js";
 import type { CardText, Hook, Structured } from "./db.js";
-import { STANCES, VALUE_IN } from "./hints.js";
+import { STANCES, VALUE_IN, WHY_TAGS } from "./hints.js";
 
 const ai = new GoogleGenAI({ apiKey: config.geminiKey });
 
@@ -13,6 +13,7 @@ export type Analysis = {
   theme: string;
   project: string[];
   why_me: string;
+  why_tags: string[];
   tags: string[];
   structured: Structured;
   raw_text: string;
@@ -27,6 +28,9 @@ export type Analysis = {
 // Who the analysis is for: output language and the user's own lists (SPEC §5.4).
 export type Profile = { lang: string; language: string; themes: string[]; projects: Record<string, string> };
 
+// The "ofst" label makes sense only for someone who has an OFST area.
+export const whyTagsFor = (p: Profile): string[] => WHY_TAGS.filter((t) => t !== "ofst" || Object.keys(p.projects).some((k) => /ofst/i.test(k)));
+
 function schemaFor(p: Profile) {
   return {
     type: Type.OBJECT,
@@ -37,6 +41,7 @@ function schemaFor(p: Profile) {
       kind: { type: Type.STRING, description: `What it is by form: video, meme, tweet, note, receipt, chat screenshot, article, voice message… (in ${p.language})` },
       theme: { type: Type.STRING, enum: p.themes },
       why_me: { type: Type.STRING, description: `Why it matters to the user: 1–2 sentences, how it helps in their life areas. Concrete. In ${p.language}` },
+      why_tags: { type: Type.ARRAY, items: { type: Type.STRING, enum: whyTagsFor(p) }, description: "How the user can use it; 1–2 labels" },
       project: { type: Type.ARRAY, items: { type: Type.STRING, enum: Object.keys(p.projects) }, description: "User's life areas this belongs to; 1–3" },
       tags: { type: Type.ARRAY, items: { type: Type.STRING }, description: `3–7 free tags, lowercase, in ${p.language}` },
       structured: {
@@ -67,7 +72,7 @@ function schemaFor(p: Profile) {
       entity: { type: Type.STRING, enum: ["person", "company", "none"], description: "For profiles: person or company; otherwise none" },
       language: { type: Type.ARRAY, items: { type: Type.STRING }, description: "Languages in the content, ISO codes: ru, uk, cs, en…" },
     },
-    required: ["title", "summary", "content_type", "kind", "theme", "project", "why_me", "tags", "structured", "raw_text", "visual_description", "value_in", "stance", "comments_note", "entity", "language"],
+    required: ["title", "summary", "content_type", "kind", "theme", "project", "why_me", "why_tags", "tags", "structured", "raw_text", "visual_description", "value_in", "stance", "comments_note", "entity", "language"],
   };
 }
 
@@ -92,6 +97,7 @@ ${Object.entries(p.projects).map(([k, v]) => `  · ${k}${v ? ` — ${v}` : ""}`)
 - comments_note — only if the comments contain something useful (clarification, link, full recipe, author's reply, a real debate); otherwise an empty string.
 - Profile (an account of a person or company): summary — who it is, what and in which format they post, visual style; why_me — how it is an example or anti-example for the user; entity — person / company.
 - why_me — how it helps the user in their life areas, 1–2 sentences, concrete (what to do, where to apply). If it's just for mood — say so.
+- why_tags — 1–2 labels for how it can be used: asset (a ready resource to take and use: font, tool, template, sound, place, contact), strategy (an approach or principle that changes how the user works, earns, studies)${whyTagsFor(p).includes("ofst") ? ", ofst (worth showing in the OFST blog / channel as \"look at this\")" : ""}, content (an idea or format for the user's own content), interesting (just curious or for mood, no direct use).
 - Don't invent anything: if there is little data (e.g. only a caption), say so in the summary.`;
 }
 
@@ -164,6 +170,9 @@ function validate(raw: string, p: Profile): Analysis {
   a.structured ??= {};
   a.raw_text ??= "";
   a.why_me ??= "";
+  const tags = whyTagsFor(p);
+  a.why_tags = [...new Set((a.why_tags ?? []).filter((t) => tags.includes(t)))];
+  if (!a.why_tags.length) a.why_tags = ["interesting"];
   a.visual_description ??= "";
   a.value_in = [...new Set((a.value_in ?? []).filter((v) => (VALUE_IN as readonly string[]).includes(v)))];
   if (!(STANCES as readonly string[]).includes(a.stance)) a.stance = "like";

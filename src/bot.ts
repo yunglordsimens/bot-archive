@@ -4,7 +4,7 @@ import { config, TG_FILE_LIMIT } from "./config.js";
 import { db, findByTextHash, insertItem, type Item } from "./db.js";
 import { duplicateText } from "./format.js";
 import { react, REACT } from "./reactions.js";
-import { tr } from "./i18n/index.js";
+import { tr, type Dict } from "./i18n/index.js";
 import { getUserByTg, updateUser, type Ctx, type User } from "./users.js";
 import { fetchTikTok, profileHandle } from "./fetchers.js";
 import { parseHints } from "./hints.js";
@@ -89,6 +89,9 @@ export function dbErrorHint(e: unknown, badKey = "invalid SUPABASE_SERVICE_ROLE_
   return msg.slice(0, 200);
 }
 
+// "20 МБ" with the cloud Bot API, "2 ГБ" with the local server.
+const limitText = (d: Dict) => (TG_FILE_LIMIT >= 1024 ** 3 ? `${Math.round(TG_FILE_LIMIT / 1024 ** 3)} ${d.units.gb}` : `${TG_FILE_LIMIT / 1024 ** 2} ${d.units.mb}`);
+
 // Albums arrive as separate updates with one media_group_id — buffer, then one reply per album.
 const albums = new Map<string, { ctx: Ctx; msgs: Message[]; timer: NodeJS.Timeout }>();
 
@@ -104,7 +107,7 @@ async function flushAlbum(groupId: string) {
   for (const { m, f } of files) {
     if ((f.file_size ?? 0) > TG_FILE_LIMIT) await react(a.ctx.api, m.chat.id, m.message_id, REACT.error);
   }
-  if (tooBig) await a.ctx.api.sendMessage(msgs[0].chat.id, d.tooBigN(tooBig), { reply_parameters: { message_id: msgs[0].message_id } }).catch(() => {});
+  if (tooBig) await a.ctx.api.sendMessage(msgs[0].chat.id, d.tooBigN(tooBig, limitText(d)), { reply_parameters: { message_id: msgs[0].message_id } }).catch(() => {});
   if (!ok.length) return;
   const caption = msgs.find((m) => m.caption)?.caption;
   // One insert so the worker never sees half an album.
@@ -117,7 +120,7 @@ async function flushAlbum(groupId: string) {
 }
 
 export function createBot() {
-  const bot = new Bot<Ctx>(config.botToken);
+  const bot = new Bot<Ctx>(config.botToken, { client: { apiRoot: config.botApiUrl } });
 
   // Archive channel: whoever makes the bot admin of a channel gets it as *their* archive.
   // Confirmation goes to that user's private chat; if that fails (no /start yet) — into the channel.
@@ -209,7 +212,7 @@ export function createBot() {
       }
       if ((file.file_size ?? 0) > TG_FILE_LIMIT) {
         await react(ctx.api, m.chat.id, m.message_id, REACT.error);
-        return ctx.reply(tr(ctx.user.lang).tooBig, { reply_parameters: { message_id: m.message_id } });
+        return ctx.reply(tr(ctx.user.lang).tooBig(limitText(tr(ctx.user.lang))), { reply_parameters: { message_id: m.message_id } });
       }
       // A screenshot of a profile grid with «профиль» in the caption is analysed as a profile.
       const kind = file.input_kind === "screenshot" && parseHints(m.caption).profile ? "profile" : file.input_kind;

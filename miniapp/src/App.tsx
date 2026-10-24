@@ -17,6 +17,51 @@ function label(d: Dict, k: FilterKey, v: string): string {
   return v;
 }
 
+const compact = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}K` : String(n));
+
+// "TikTok" / "Instagram" / "YouTube" / site name — on the Source button.
+function platformName(it: Pick<Full, "origin" | "source_url">) {
+  const known: Record<string, string> = { tiktok: "TikTok", instagram: "Instagram", youtube: "YouTube" };
+  if (it.origin && known[it.origin]) return known[it.origin];
+  try {
+    return new URL(it.source_url!).hostname.replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+}
+
+// Name or nick from Telegram — the header until the user sets their own (SPEC §8).
+function telegramName(): string {
+  const u = tg?.initDataUnsafe?.user;
+  if (!u) return "";
+  return [u.first_name, u.last_name].filter(Boolean).join(" ") || (u.username ? `@${u.username}` : "");
+}
+
+// Telegram colours (SPEC §8): the page uses --tg-theme-* (set by telegram-web-app.js, see style.css); the bar above
+// the page and the background behind it get the same bg colour — otherwise Telegram's ✕ and ⋯ sit on a white bar.
+function applyTheme() {
+  if (!tg) return;
+  const bg: string = tg.themeParams?.bg_color ?? "bg_color";
+  tg.setHeaderColor?.(bg);
+  tg.setBackgroundColor?.(bg);
+  if (tg.isVersionAtLeast?.("7.10")) tg.setBottomBarColor?.(bg);
+  document.documentElement.style.colorScheme = tg.colorScheme === "light" ? "light" : "dark";
+}
+
+// Telegram's Back button: shown while onBack is set.
+function useBackButton(onBack?: () => void) {
+  useEffect(() => {
+    const b = tg?.BackButton;
+    if (!b || !onBack) return;
+    b.show();
+    b.onClick(onBack);
+    return () => {
+      b.offClick(onBack);
+      b.hide();
+    };
+  }, [onBack]);
+}
+
 const isTgLink = (u: string) => /^https:\/\/t\.me\//.test(u);
 function open(url: string) {
   if (tg && isTgLink(url)) tg.openTelegramLink(url);
@@ -38,9 +83,10 @@ export function App() {
   useEffect(() => {
     tg?.ready();
     tg?.expand();
-    tg?.setHeaderColor?.("#0d0d0e");
-    tg?.setBackgroundColor?.("#0d0d0e");
+    applyTheme();
+    tg?.onEvent?.("themeChanged", applyTheme);
     if (initData) load();
+    return () => tg?.offEvent?.("themeChanged", applyTheme);
   }, [load]);
 
   if (!initData) return <Message text={s.openInTelegram} />;
@@ -66,17 +112,13 @@ function Archive({ init, s, d, reloadFacets }: { init: Init; s: S; d: Dict; relo
   const [filters, setFilters] = useState<Filters>({});
   const [openId, setOpenId] = useState<number>();
   const [blogMarks, setBlogMarks] = useState<Record<number, boolean>>({}); // toggled in the card, reflected in the feed
+  const [name, setName] = useState(init.user.display_name ?? "");
+  const shownName = name || telegramName() || s.title;
+  useEffect(() => void (document.title = shownName), [shownName]);
 
   // Telegram's Back button closes the card.
-  useEffect(() => {
-    if (!tg?.BackButton) return;
-    const back = () => setOpenId(undefined);
-    if (openId) {
-      tg.BackButton.show();
-      tg.BackButton.onClick(back);
-    } else tg.BackButton.hide();
-    return () => tg.BackButton.offClick(back);
-  }, [openId]);
+  const closeItem = useCallback(() => setOpenId(undefined), []);
+  useBackButton(openId ? closeItem : undefined);
 
   const pick = (k: FilterKey, v: string) => {
     setFilters({ [k]: v });
@@ -87,7 +129,8 @@ function Archive({ init, s, d, reloadFacets }: { init: Init; s: S; d: Dict; relo
     <>
       <div style={{ display: openId ? "none" : undefined }}>
         {tab === "feed"
-          ? <FeedView s={s} d={d} facets={init.facets} filters={filters} setFilters={setFilters} onOpen={setOpenId} blogMarks={blogMarks} />
+          ? <FeedView s={s} d={d} facets={init.facets} filters={filters} setFilters={setFilters} onOpen={setOpenId} blogMarks={blogMarks}
+              title={<NameTitle name={shownName} own={name} s={s} onSaved={setName} />} />
           : <TopicsView s={s} facets={init.facets} onPick={pick} />}
         <nav className="tabs">
           <button className={tab === "feed" ? "on" : ""} onClick={() => setTab("feed")}>{s.feed}</button>
@@ -102,8 +145,34 @@ function Archive({ init, s, d, reloadFacets }: { init: Init; s: S; d: Dict; relo
   );
 }
 
-function FeedView({ s, d, facets, filters, setFilters, onOpen, blogMarks }: {
+// Header = the user's name; tap to change it (empty = name from Telegram).
+function NameTitle({ name, own, s, onSaved }: { name: string; own: string; s: S; onSaved: (v: string) => void }) {
+  const [draft, setDraft] = useState<string>();
+  const [busy, setBusy] = useState(false);
+  if (draft === undefined) return <h1 className="name" onClick={() => setDraft(own)}>{name}</h1>;
+  const save = async () => {
+    setBusy(true);
+    try {
+      const r = await call<{ display_name: string | null }>("name", { value: draft });
+      onSaved(r.display_name ?? "");
+      setDraft(undefined);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <form className="rename" onSubmit={(e) => (e.preventDefault(), save())}>
+      <input autoFocus value={draft} maxLength={40} placeholder={s.namePlaceholder} onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => e.key === "Escape" && setDraft(undefined)} />
+      <button className="btn on" disabled={busy}>{s.save}</button>
+      <button type="button" className="clear-btn" onClick={() => setDraft(undefined)} aria-label="×">×</button>
+    </form>
+  );
+}
+
+function FeedView({ s, d, facets, filters, setFilters, onOpen, blogMarks, title }: {
   s: S; d: Dict; facets: Facets; filters: Filters; setFilters: (f: Filters) => void; onOpen: (id: number) => void; blogMarks: Record<number, boolean>;
+  title: React.ReactNode;
 }) {
   const [q, setQ] = useState("");
   const [query, setQuery] = useState(""); // debounced
@@ -112,6 +181,7 @@ function FeedView({ s, d, facets, filters, setFilters, onOpen, blogMarks }: {
   const [loading, setLoading] = useState(false);
   const [failed, setFailed] = useState(false);
   const [sheet, setSheet] = useState<FilterKey>();
+  const closeSheet = useCallback(() => setSheet(undefined), []);
   const seq = useRef(0);
 
   useEffect(() => {
@@ -151,7 +221,7 @@ function FeedView({ s, d, facets, filters, setFilters, onOpen, blogMarks }: {
   return (
     <main className="page">
       <header className="head">
-        <h1>{s.title}</h1>
+        {title}
         <span className="muted">{s.items(facets.total)}</span>
       </header>
       <div className="search">
@@ -178,16 +248,18 @@ function FeedView({ s, d, facets, filters, setFilters, onOpen, blogMarks }: {
       <div ref={end} />
 
       {sheet && (
-        <Sheet title={s.filters[sheet]} onClose={() => setSheet(undefined)}>
-          <button className={`opt ${!filters[sheet] ? "on" : ""}`} onClick={() => { setFilters({ ...filters, [sheet]: undefined }); setSheet(undefined); }}>
-            <span>{s.all}</span>
+        // Full screen; tapping the selected value again clears it (= All).
+        <Picker title={s.filters[sheet]} onClose={closeSheet}>
+          <button className={`opt ${!filters[sheet] ? "on" : ""}`} onClick={() => { setFilters({ ...filters, [sheet]: undefined }); closeSheet(); }}>
+            <span>{s.all}</span><span className="muted">{facets.total}</span>
           </button>
           {Object.entries(facets.counts[sheet] ?? {}).sort((a, b) => b[1] - a[1]).map(([v, n]) => (
-            <button key={v} className={`opt ${filters[sheet] === v ? "on" : ""}`} onClick={() => { setFilters({ ...filters, [sheet]: v }); setSheet(undefined); }}>
-              <span>{label(d, sheet, v)}</span><span className="muted">{n}</span>
+            <button key={v} className={`opt ${filters[sheet] === v ? "on" : ""}`}
+              onClick={() => { setFilters({ ...filters, [sheet]: filters[sheet] === v ? undefined : v }); closeSheet(); }}>
+              <span>{label(d, sheet, v)}</span><span className="muted">{filters[sheet] === v ? "✓ " : ""}{n}</span>
             </button>
           ))}
-        </Sheet>
+        </Picker>
       )}
     </main>
   );
@@ -216,13 +288,19 @@ function Thumb({ src, fallback, big }: { src: string | null; fallback: string; b
   return big ? null : <div className="thumb empty">{fallback}</div>;
 }
 
-function Sheet({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
+function Picker({ title, onClose, children }: { title: string; onClose: () => void; children: React.ReactNode }) {
+  useBackButton(onClose);
+  useEffect(() => {
+    document.body.style.overflow = "hidden"; // the feed underneath doesn't scroll
+    return () => void (document.body.style.overflow = "");
+  }, []);
   return (
-    <div className="sheet-bg" onClick={onClose}>
-      <div className="sheet" onClick={(e) => e.stopPropagation()}>
-        <div className="sheet-title">{title}</div>
-        <div className="sheet-list">{children}</div>
-      </div>
+    <div className="picker">
+      <header className="picker-head">
+        <h1>{title}</h1>
+        <button className="clear-btn" onClick={onClose} aria-label="×">×</button>
+      </header>
+      <div className="picker-list">{children}</div>
     </div>
   );
 }
@@ -291,20 +369,28 @@ function ItemView({ id, s, d, onTag, onBlog }: { id: number; s: S; d: Dict; onTa
   const published = it.raw_meta?.published_at ?? it.occurred_at;
   const hook = it.hook ? Object.entries(d.card.hook).filter(([k]) => it.hook![k]) : [];
   const en = it.raw_meta?.en;
+  const au = it.raw_meta?.author;
+  const who = au?.handle && au.name && au.name !== au.handle ? `${au.name} (@${au.handle})` : au?.handle ? `@${au.handle}` : au?.name ?? (it.author ? `@${it.author.replace(/^@/, "")}` : "");
+  const authorUrl = au?.url ?? it.raw_meta?.author_url;
 
   return (
     <main className="page item">
-      <Thumb src={it.preview} fallback="" big />
+      {it.preview && it.archive_link
+        ? <button className="hero-link" onClick={() => open(it.archive_link!)} aria-label={s.inChannel}>
+            <Thumb src={it.preview} fallback="" big /><span className="hero-badge">{s.inChannel}</span>
+          </button>
+        : <Thumb src={it.preview} fallback="" big />}
       <h1 className="item-title">{it.title ?? "—"}</h1>
       <div className="muted meta">
         {d.sources[sourceKey(it)] ?? ""}
-        {it.author && <> · {it.raw_meta?.author_url ? <button className="link" onClick={() => open(it.raw_meta!.author_url!)}>@{it.author.replace(/^@/, "")}</button> : `@${it.author.replace(/^@/, "")}`}</>}
+        {who && <> · {authorUrl ? <button className="link" onClick={() => open(authorUrl)}>{who}</button> : who}</>}
+        {au?.followers != null && <> · 👥 {d.post.followers(compact(au.followers))}</>}
         {published && <> · 📅 {fmtDate(d, published, true)}</>}
         {" · "}🗄 {fmtDate(d, it.created_at, true)}
       </div>
       <div className="actions">
-        {it.source_url && <button className="btn" onClick={() => open(it.source_url!)}>{s.original}</button>}
-        {it.archive_link && <button className="btn" onClick={() => open(it.archive_link!)}>{s.inChannel}</button>}
+        {it.source_url && <button className="btn" onClick={() => open(it.source_url!)}>{[s.source, platformName(it)].filter(Boolean).join(" · ")} ↗</button>}
+        {it.archive_link && !it.preview && <button className="btn" onClick={() => open(it.archive_link!)}>{s.inChannel}</button>}
         <button className={`btn ${it.for_blog ? "on" : ""}`} onClick={toggleBlog} disabled={busy}>{it.for_blog ? s.inBlog : s.toBlog}</button>
       </div>
       <div className="chips wrap">
@@ -312,7 +398,7 @@ function ItemView({ id, s, d, onTag, onBlog }: { id: number; s: S; d: Dict; onTa
       </div>
 
       <Section title={s.summary} text={it.summary} />
-      <Section title={`💭 ${d.card.why}`} text={it.why_me} />
+      <Section title={[`💭 ${d.card.why}`, ...(it.why_tags ?? []).map((t) => (d.whyTags as Record<string, string>)[t]).filter(Boolean)].join(" · ")} text={it.why_me} />
       <List title={d.card.points} items={st.points} />
       <List title={d.card.ingredients} items={st.ingredients} />
       <List title={d.card.steps} items={st.steps} ordered />

@@ -1,6 +1,6 @@
 import { createClient } from "@supabase/supabase-js";
 import { config } from "./config.js";
-import type { Stats } from "./fetchers.js";
+import type { Author, Stats } from "./fetchers.js";
 
 export const db = createClient(config.supabaseUrl, config.supabaseKey, {
   auth: { persistSession: false },
@@ -34,6 +34,7 @@ export type Item = {
   theme: string | null;
   project: string[];
   why_me: string | null;
+  why_tags?: string[];
   visual_description: string | null;
   value_in: string[];
   stance: string | null;
@@ -61,7 +62,7 @@ export type ItemInput = {
 
 export type NamedList = { title: string; items: string[] };
 // Bump when the card/post format changes: /reprocess picks up items below this version.
-export const FORMAT_VERSION = 4;
+export const FORMAT_VERSION = 5;
 
 export type Hook = {
   looks_accidental: string; probably_deliberate: string; how_hidden: string; first_seconds: string; visual: string; audio: string;
@@ -77,6 +78,7 @@ export type RawMeta = {
   reprocess_log?: string[];
   comments?: string[];        // top comments given to Gemini
   author_url?: string;
+  author?: Author;            // name, @handle, profile link, platform, followers at save time
   published_at?: string;
   profile?: { followers?: number; following?: number; posts?: number; likes?: number; bio?: string; entity?: string; platform?: string; verified?: boolean };
 };

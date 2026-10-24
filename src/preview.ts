@@ -69,7 +69,7 @@ async function sourceFor(api: Api, it: Item): Promise<Thumb | undefined> {
   if (NO_PICTURE.has(it.input_kind)) return undefined;
   const fileId = it.tg_file_id ?? it.archive_file_ids?.[0] ?? it.input?.file_id;
   if (fileId) {
-    const buf = await tgDownload(api, fileId).catch(() => undefined); // >20 MB can't be downloaded by a bot
+    const buf = await tgDownload(api, fileId).catch(() => undefined); // over the Bot API limit (20 MB in the cloud) → other sources
     if (buf) return buf;
   }
   const yt = it.origin === "youtube" ? await youtubeThumb(it.source_url) : undefined;

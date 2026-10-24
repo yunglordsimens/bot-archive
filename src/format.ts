@@ -4,6 +4,13 @@ import { fmtDate, plural, type Dict } from "./i18n/index.js";
 
 export const esc = (s: string) => s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]!);
 
+// "💭 Зачем мне · 🧱 актив · ♟ стратегия" + the text below.
+export function whyBlock(d: Dict, title: string, it: Pick<Item, "why_me" | "why_tags">) {
+  if (!it.why_me) return "";
+  const tags = (it.why_tags ?? []).map((t) => d.whyTags[t as keyof Dict["whyTags"]]).filter(Boolean);
+  return `💭 <b>${title}</b>${tags.length ? ` · ${tags.join(" · ")}` : ""}\n${esc(it.why_me)}`;
+}
+
 export const typeLabel = (d: Dict, type?: string | null) => {
   const k = (type && type in d.types ? type : "other") as keyof Dict["types"];
   return `${TYPE_EMOJI[k]} ${d.types[k]}`;

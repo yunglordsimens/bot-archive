@@ -3,7 +3,7 @@ import type { Part } from "@google/genai";
 import { db, FORMAT_VERSION, updateItem, type Item, type RawMeta } from "./db.js";
 import { needsFormatAnalysis, parseHints } from "./hints.js";
 import { analyze, textPart, urlPart } from "./gemini.js";
-import { fetchComments, fetchMeta, fetchWebPage } from "./fetchers.js";
+import { authorInfo, fetchComments, fetchMeta, fetchWebPage } from "./fetchers.js";
 import { postCard, postTranscript, rewritePost } from "./channel.js";
 import { applyAnalysis } from "./worker.js";
 import { addFormatAnalysis, contextText, originalMedia } from "./analysis.js";
@@ -36,7 +36,9 @@ async function reprocessItem(api: Api, it: Item, u: User): Promise<{ reposted: b
     if (m?.author) patch.author = it.author = m.author;
     if (m?.caption && !it.caption) patch.caption = it.caption = m.caption;
     if (m?.stats && !meta.stats) meta.stats = m.stats; // counters at save time are not recoverable; better late than never
-    meta.author_url ??= m?.authorUrl ?? (it.origin === "tiktok" && it.author ? `https://www.tiktok.com/@${it.author}` : undefined);
+    const author = m ? await authorInfo(it.source_url!, m) : undefined;
+    if (author) meta.author = { ...meta.author, ...author, followers: meta.author?.followers ?? author.followers }; // followers at save time win
+    meta.author_url ??= author?.url ?? m?.authorUrl ?? (it.origin === "tiktok" && it.author ? `https://www.tiktok.com/@${it.author}` : undefined);
     meta.published_at ??= meta.stats?.published_at ?? m?.stats?.published_at;
     if (comments.length) meta.comments = comments;
   }

@@ -1,8 +1,9 @@
 import { InlineKeyboard, type Api, type Bot } from "grammy";
 import { config, TYPE_EMOJI } from "./config.js";
 import { db, type Item } from "./db.js";
-import { archiveState } from "./archive.js";
-import { esc, listLine, typeLabel } from "./format.js";
+import { archiveChannel, archiveState } from "./archive.js";
+import { errorReason, esc, listLine, typeLabel } from "./format.js";
+import { republish } from "./worker.js";
 import { allButtons, DICTS, LANGS, plural, tr, type Dict, type Lang } from "./i18n/index.js";
 import { addUser, listUsers, updateUser, userProjects, userThemes, type Ctx, type User } from "./users.js";
 
@@ -276,6 +277,19 @@ export function registerUi(bot: Bot<Ctx>) {
     const n = await requeue(ctx.user, [Number(ctx.match[1])]);
     await ctx.answerCallbackQuery(n ? d.ui.retryingShort : d.ui.notFailed);
     if (n) await ctx.editMessageText(d.ui.retrying).catch(() => {});
+  });
+  // Saved without an archive post → publish it now (in the background: a TikTok may need downloading again).
+  bot.callbackQuery(/^repost:(\d+)$/, async (ctx) => {
+    const d = tr(ctx.user.lang);
+    const { data } = await db.from("items").select().eq("id", Number(ctx.match[1])).eq("user_id", ctx.user.id).maybeSingle();
+    const it = data as Item | null;
+    if (!it) return ctx.answerCallbackQuery(d.card.notFound);
+    const done = (link: string) => ctx.editMessageText(`${d.card.reposted} · <a href="${link}">${d.inArchive}</a>`, html).catch(() => {});
+    if (it.archive_link) return ctx.answerCallbackQuery().then(() => done(it.archive_link!));
+    if (!archiveChannel(ctx.user)) return ctx.answerCallbackQuery({ text: d.noChannel, show_alert: true });
+    await ctx.answerCallbackQuery("…");
+    void republish(ctx.api, it, ctx.user).then(done, (e) =>
+      ctx.reply(d.card.repostFailed(esc(errorReason(d, String((e as Error)?.message ?? e)))), { reply_parameters: { message_id: ctx.msg!.message_id } }).catch(() => {}));
   });
   bot.callbackQuery("retryall", async (ctx) => {
     await ctx.answerCallbackQuery();

@@ -14,6 +14,7 @@ export type Dict = {
   sources: Record<string, string>;
   stance: Record<string, string>;
   value: Record<string, string>;
+  whyTags: Record<"asset" | "strategy" | "ofst" | "content" | "interesting", string>;
   defaultThemes: string[];   // last one = "misc"
   defaultProjects: string[]; // last one = "misc"
 
@@ -21,8 +22,9 @@ export type Dict = {
 
   btn: { recent: string; projects: string; themes: string; types: string; status: string; help: string };
   accepted: string;
-  tooBig: string;
-  tooBigN: Fn1;
+  tooBig: Fn1;                                   // limit, e.g. "20 МБ" / "2 ГБ"
+  tooBigN: (n: number, limit: string) => string;
+  units: { mb: string; gb: string };
   dbDown: Fn1;
   dbBadKey: string;
   unknownCommand: string;
@@ -37,10 +39,12 @@ export type Dict = {
   stillProcessing: string;
   errors: { overloaded: string; quota: string; key: string; channel: string; json: string; network: string; unknown: string; other: Fn1 };
   failed: Fn1;
-  batch: { already: Fn1; notParsed: Fn1; saved: string; failedList: Fn1 };
+  noPost: Fn1;      // saved, but the archive-channel post didn't go out
+  noChannel: string;
+  batch: { already: Fn1; notParsed: Fn1; saved: string; failedList: Fn1; noPost: Fn1 };
 
   card: {
-    more: string; less: string; transcript: string; retry: string; edit: string; formatShow: string; formatRun: string; back: string;
+    more: string; less: string; transcript: string; retry: string; repost: string; reposted: string; repostFailed: Fn1; edit: string; formatShow: string; formatRun: string; back: string;
     points: string; ingredients: string; steps: string; why: string; inFrame: string; move: string; comments: string; similar: string;
     moreItems: Fn1; tooLong: string; notFound: string; translating: string; noTranscript: string; transcriptTitle: string; saved: string;
     formatRunning: string; formatFailed: Fn1; videoUnavailable: string; editTitle: string; stanceLbl: string; valueLbl: string; formatTitle: string;
@@ -74,6 +78,6 @@ export type Dict = {
     progress: (i: number, n: number) => string; done: (changed: number, n: number) => string;
   };
   menuButton: string; // the "Menu" button that opens the Mini App
-  // Only these go to the command menu; the rest (/recent, /status, /reprocess, /projects…) still work when typed.
-  commands: Record<"retry" | "resort" | "lang" | "notify" | "help", string>;
+  // Only these go to the command menu (SPEC §7); the rest (/recent, /status, /projects…) still work when typed.
+  commands: Record<"retry" | "resort" | "reprocess" | "lang" | "notify" | "help", string>;
 };
