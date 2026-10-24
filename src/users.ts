@@ -15,6 +15,7 @@ export type User = {
   themes: string[] | null;                 // null = defaults for the language
   is_admin: boolean;
   notify: boolean; // one line with a link to the post after saving (otherwise only reactions and errors)
+  paused: boolean; // /pause: new items are saved and posted as originals, no Gemini until /resume (SPEC §7)
 };
 
 const TTL = 60_000;

@@ -5,7 +5,7 @@ import { archiveChannel, archiveState } from "./archive.js";
 import { errorReason, esc, listLine, typeLabel } from "./format.js";
 import { republish } from "./worker.js";
 import { allButtons, DICTS, LANGS, plural, tr, type Dict, type Lang } from "./i18n/index.js";
-import { addUser, listUsers, updateUser, userProjects, userThemes, type Ctx, type User } from "./users.js";
+import { addUser, getUserByTg, listUsers, updateUser, userProjects, userThemes, type Ctx, type User } from "./users.js";
 
 const html = { parse_mode: "HTML" as const, link_preview_options: { is_disabled: true } };
 const SAVED = ["ok", "pending_media"];
@@ -64,7 +64,7 @@ async function typesMenu(u: User) {
 
 async function statusMessage(api: Api, botId: number, u: User) {
   const d = tr(u.lang);
-  const statuses = ["ok", "pending_media", "queued", "processing", "failed"] as const;
+  const statuses = ["ok", "pending_media", "queued", "processing", "failed", "paused"] as const;
   const counts = await Promise.all(statuses.map(async (s) => {
     const { count } = await db.from("items").select("id", { count: "exact", head: true }).eq("user_id", u.id).eq("status", s);
     return count ?? 0;
@@ -84,6 +84,7 @@ async function statusMessage(api: Api, botId: number, u: User) {
     `${d.ui.saved}: ${c.ok + c.pending_media}`,
     c.queued || c.processing ? d.ui.queue(c.queued, c.processing) : d.ui.queueEmpty,
   ];
+  if (u.paused) lines.push(d.pause.status(c.paused));
   if (c.pending_media) lines.push(`${d.ui.pending}: ${c.pending_media}`);
   if (c.failed) lines.push(d.ui.failedN(c.failed));
   if (last) {
@@ -132,6 +133,30 @@ export function registerUi(bot: Bot<Ctx>) {
     await ctx.reply(n ? d.ui.requeued(plural(d, n, d.forms.items)) : d.ui.nothingToRetry);
   };
   const showHelp = (ctx: Ctx) => ctx.reply(tr(ctx.user.lang).ui.help, { ...html, reply_markup: removeKeyboard });
+
+  // /pause, /resume (SPEC §7): while paused nothing goes to Gemini — new items are saved, downloaded and posted to the
+  // channel as originals (status 'paused'). /resume puts them into the queue. The owner can pause anyone: /pause <telegram_id>.
+  const pauseCommand = (on: boolean) => async (ctx: Ctx & { match: string }) => {
+    const d = tr(ctx.user.lang);
+    const arg = ctx.match.trim();
+    let target: User | undefined = ctx.user;
+    if (arg) {
+      if (!ctx.user.is_admin || !/^\d+$/.test(arg)) return ctx.reply(d.pause.usage);
+      target = await getUserByTg(Number(arg));
+      if (!target) return ctx.reply(d.pause.noUser);
+    }
+    const who = target.id === ctx.user.id ? "" : ` (${target.telegram_user_id}${target.name ? ` ${target.name}` : ""})`;
+    if (target.paused === on) return ctx.reply((on ? d.pause.already : d.pause.notPaused) + who);
+    const u = await updateUser(target, { paused: on });
+    if (u.id === ctx.user.id) ctx.user = u;
+    if (on) return ctx.reply(d.pause.on + who);
+    const { data, error } = await db.from("items").update({ status: "queued", attempts: 0, next_retry_at: null, updated_at: new Date().toISOString() })
+      .eq("user_id", u.id).eq("status", "paused").select("id");
+    if (error) throw error;
+    await ctx.reply(d.pause.off(plural(d, data?.length ?? 0, d.forms.items)) + who);
+  };
+  bot.command("pause", pauseCommand(true));
+  bot.command("resume", pauseCommand(false));
 
   bot.command("start", async (ctx) => {
     const d = tr(ctx.user.lang);

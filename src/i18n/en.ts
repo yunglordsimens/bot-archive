@@ -117,6 +117,14 @@ Also: /status — bot and queue · /reprocess — update old items · /projects 
     isOn: "🔔 On: after saving I'll send a line with a link to the post.",
     isOff: "🔕 Off: the chat only gets reactions and errors, everything else is in the archive channel.",
   },
+  pause: {
+    on: "⏸ paused: new items are saved, downloaded and posted to the channel as originals (😴 on the message), nothing goes to Gemini. Continue: /resume",
+    off: (n) => `▶️ resumed: ${n} queued for analysis`,
+    already: "already paused — continue: /resume", notPaused: "not paused",
+    usage: "/pause or /resume — for yourself; owner: /pause <telegram_id> — for another user",
+    noUser: "no such user — see /users",
+    status: (n) => `⏸ paused — waiting for analysis: ${n} · /resume`,
+  },
   projects: {
     current: (l) => `🧭 Your areas:\n${l}\n\nChange: /projects work, study, hobby, misc`,
     set: (l) => `✅ Areas updated:\n${l}\n\nNew items will use them; old ones after /reprocess all.`,
@@ -157,6 +165,7 @@ Try again or word it differently.`,
   },
   menuButton: "Archive",
   commands: {
+    pause: "pause: no Gemini, only save", resume: "continue analysis",
     retry: "retry errors and items without video", resort: "re-sort: describe how you want it",
     reprocess: "bring old items and posts to the current format",
     lang: "language", notify: "a line with a link to the post after saving", help: "how to use",

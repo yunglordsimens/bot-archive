@@ -108,7 +108,7 @@ export async function findByTextHash(userId: number, hash: string): Promise<Item
     .select()
     .eq("user_id", userId)
     .eq("text_hash", hash)
-    .in("status", ["ok", "pending_media", "queued", "processing"])
+    .in("status", ["ok", "pending_media", "queued", "processing", "paused"])
     .limit(1)
     .maybeSingle();
   return data as Item | null;

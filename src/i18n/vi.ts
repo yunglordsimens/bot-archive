@@ -117,6 +117,14 @@ Thêm: /status — bot và hàng đợi · /reprocess — cập nhật mục cũ
     isOn: "🔔 Đã bật: sau khi lưu mình sẽ gửi một dòng có liên kết tới bài.",
     isOff: "🔕 Đã tắt: trong chat chỉ có cảm xúc và lỗi, mọi thứ khác ở kênh lưu trữ.",
   },
+  pause: {
+    on: "⏸ tạm dừng: mục mới vẫn được lưu, tải về và đăng bản gốc lên kênh (😴 trên tin nhắn), nhưng không gửi tới Gemini. Tiếp tục: /resume",
+    off: (n) => `▶️ tiếp tục: ${n} đang chờ phân tích`,
+    already: "đang tạm dừng — tiếp tục: /resume", notPaused: "không ở chế độ tạm dừng",
+    usage: "/pause hoặc /resume — cho bạn; chủ sở hữu: /pause <telegram_id> — cho người khác",
+    noUser: "không có người dùng này — xem /users",
+    status: (n) => `⏸ tạm dừng — chờ phân tích: ${n} · /resume`,
+  },
   projects: {
     current: (l) => `🧭 Lĩnh vực của bạn:\n${l}\n\nThay đổi: /projects công việc, học tập, sở thích, khác`,
     set: (l) => `✅ Đã cập nhật lĩnh vực:\n${l}\n\nMục mới sẽ được xếp theo đó; mục cũ sau /reprocess all.`,
@@ -157,6 +165,7 @@ Thử lại hoặc diễn đạt khác.`,
   },
   menuButton: "Lưu trữ",
   commands: {
+    pause: "tạm dừng: không dùng Gemini, chỉ lưu", resume: "tiếp tục phân tích",
     retry: "thử lại lỗi và mục chưa có video", resort: "sắp xếp lại: mô tả bằng lời",
     reprocess: "cập nhật bản ghi và bài cũ sang định dạng mới",
     lang: "ngôn ngữ", notify: "một dòng có liên kết tới bài sau khi lưu", help: "cách dùng",

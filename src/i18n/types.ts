@@ -65,6 +65,7 @@ export type Dict = {
   channel: { connected: Fn1; pressStart: string; disconnected: Fn1; notConnected: string; notAdmin: string; unavailable: string };
   lang: { choose: string; set: string };
   notify: { choose: string; on: string; off: string; isOn: string; isOff: string };
+  pause: { on: string; off: Fn1; already: string; notPaused: string; usage: string; noUser: string; status: Fn1 };
   projects: { current: Fn1; set: Fn1 };
   admin: { usage: string; added: (id: number, lang: string) => string; exists: string; list: string };
   reprocess: {
@@ -79,5 +80,5 @@ export type Dict = {
   };
   menuButton: string; // the "Menu" button that opens the Mini App
   // Only these go to the command menu (SPEC §7); the rest (/recent, /status, /projects…) still work when typed.
-  commands: Record<"retry" | "resort" | "reprocess" | "lang" | "notify" | "help", string>;
+  commands: Record<"pause" | "resume" | "retry" | "resort" | "reprocess" | "lang" | "notify" | "help", string>;
 };

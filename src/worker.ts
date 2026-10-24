@@ -7,7 +7,7 @@ import { analyze, embed, mediaPart, sleep, textPart, translateCard, urlPart, typ
 import { needsFormatAnalysis, parseHints } from "./hints.js";
 import { addFormatAnalysis, contextText, tgDownload } from "./analysis.js";
 import { authorInfo, fetchComments, fetchMeta, fetchProfile, fetchTikTok, fetchVideoGeneric, fetchWebPage, fetchYouTubeText, profileHandle, resolveTikTok, updateYtdlp, type Fetched } from "./fetchers.js";
-import { postCard, postTranscript, publishToChannel, type Publish } from "./channel.js";
+import { postCard, postTranscript, publishToChannel, rewritePost, type Publish } from "./channel.js";
 import { batchMessage, duplicateText, errorReason, esc, failedText } from "./format.js";
 import { archiveChannel } from "./archive.js";
 import { react, REACT } from "./reactions.js";
@@ -249,9 +249,17 @@ export async function applyAnalysis(it: Item, a: Analysis, patch: Record<string,
 }
 
 // Every item gets a post in the archive channel (new format) + transcript reply under it.
+// An item posted while paused already has its post (with the media): it is edited, not posted a second time.
+// A post without media (video didn't download back then) is replaced when the media is here now.
 async function publishItem(api: Api, it: Item, patch: Record<string, unknown>, pub: Publish, u: User) {
   const full = { ...it, ...patch } as Item;
-  const posted = await safeArchive(() => publishToChannel(api, full, pub, u), patch);
+  const reuse = !!it.archive_link && !(pub?.kind === "upload" && !it.archive_file_ids?.length);
+  const posted = await safeArchive(async () => {
+    if (!reuse) return publishToChannel(api, full, pub, u);
+    const r = await rewritePost(api, full, u);
+    if (r.reposted) full.raw_meta = { ...full.raw_meta, card_links: undefined, transcript_link: undefined };
+    return { fileIds: [] as string[], link: r.link };
+  }, patch);
   if (!posted.link) return;
   patch.archive_link = posted.link;
   if (posted.fileIds.length) Object.assign(patch, { archive_file_ids: posted.fileIds, tg_file_id: posted.fileIds[0] });
@@ -277,12 +285,52 @@ export async function republish(api: Api, it: Item, u: User): Promise<string> {
   return patch.archive_link as string;
 }
 
+const firstLine = (s?: string | null) => s?.split("\n").map((l) => l.trim()).find(Boolean)?.slice(0, 100);
+
+// Paused user (SPEC §7, /pause): saved, downloaded (yt-dlp is free) and posted to the archive channel as the original —
+// but nothing goes to Gemini. /resume puts these items back to the queue; publishItem then edits this post.
+// Never fails: what couldn't be fetched now is fetched again after /resume.
+async function holdItem(api: Api, it: Item, u: User) {
+  const meta: RawMeta = { ...it.raw_meta };
+  const patch: Record<string, unknown> = { status: "paused" };
+  let pub: Publish;
+  const kind = it.input_kind === "link" ? it.origin : it.input_kind;
+  try {
+    if ((kind === "tiktok" || kind === "instagram") && it.source_url) {
+      const f = kind === "tiktok" ? await fetchTikTok(it.source_url) : await fetchVideoGeneric(it.source_url);
+      const author = await authorInfo(it.source_url, f).catch(() => undefined);
+      Object.assign(patch, { caption: f.caption, author: f.author, title: firstLine(f.caption) });
+      Object.assign(meta, { via: f.via, log: f.log, stats: f.stats, author, author_url: author?.url ?? f.authorUrl ?? profileUrl(it.origin, f.author),
+        published_at: f.stats?.published_at ?? f.date });
+      if (!it.occurred_at && f.date) patch.occurred_at = f.date;
+      if (f.video || f.images?.length) pub = { kind: "upload", video: f.video, images: f.images };
+    } else if (kind === "youtube" && it.source_url) {
+      const m = await fetchMeta(it.source_url);
+      const author = m && await authorInfo(it.source_url, m).catch(() => undefined);
+      Object.assign(patch, { author: m?.author, caption: m?.caption, title: firstLine(m?.caption) });
+      Object.assign(meta, { stats: m?.stats, author, author_url: author?.url ?? m?.authorUrl, published_at: m?.stats?.published_at });
+    } else if (kind === "other" && it.source_url) {
+      const p = await fetchWebPage(it.source_url);
+      Object.assign(patch, { caption: p.title, author: p.site, title: p.title });
+    } else if (it.input?.file_id) pub = { kind: "copy" };
+  } catch (e) {
+    console.warn(`item ${it.id} (paused): fetch failed, will retry after /resume`, (e as Error)?.message ?? e);
+  }
+  patch.title ??= firstLine(it.input?.text) ?? null;
+  patch.raw_meta = meta;
+  if (!it.archive_link) await publishItem(api, it, patch, pub, u);
+  await updateItem(it.id, patch);
+  Object.assign(it, patch);
+  await react(api, it.tg_chat_id, it.tg_message_id, REACT.paused);
+}
+
 const MAX_TRANSIENT_ATTEMPTS = 4;
 const isTransient = (e: string) => /503|500|429|UNAVAILABLE|overloaded|high demand|RESOURCE_EXHAUSTED|fetch failed|ECONNRESET|ETIMEDOUT|socket hang up/i.test(e);
 const errorReasonShort = (d: Dict, e: string) => (/429|RESOURCE_EXHAUSTED/i.test(e) ? d.errors.quota : /fetch failed|ECONN|ETIMEDOUT|socket/i.test(e) ? d.errors.network : d.errors.overloaded);
 
 export async function handle(api: Api, it: Item) {
   const u = await getUserById(it.user_id);
+  if (u.paused) return holdItem(api, it, u);
   const d = tr(u.lang);
   await react(api, it.tg_chat_id, it.tg_message_id, REACT.working); // also on retries
   const downloads = it.input_kind === "tiktok" || it.origin === "instagram";
@@ -324,7 +372,11 @@ let lastYtdlpUpdate = 0;
 
 // Once an hour: requeue pending_media whose retry time has come (after yt-dlp -U, max once a day).
 async function requeueMedia() {
-  const { data } = await db.from("items").select("id").eq("status", "pending_media").lte("next_retry_at", new Date().toISOString());
+  // Paused users' items wait for /resume (a retry would call Gemini).
+  const { data: paused } = await db.from("users").select("id").eq("paused", true);
+  let q = db.from("items").select("id").eq("status", "pending_media").lte("next_retry_at", new Date().toISOString());
+  if (paused?.length) q = q.not("user_id", "in", `(${paused.map((p) => p.id).join(",")})`);
+  const { data } = await q;
   if (!data?.length) return;
   if (Date.now() - lastYtdlpUpdate > DAY) {
     await updateYtdlp();

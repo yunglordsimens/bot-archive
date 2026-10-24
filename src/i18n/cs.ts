@@ -117,6 +117,14 @@ Také: /status — bot a fronta · /reprocess — aktualizovat staré záznamy �
     isOn: "🔔 Zapnuto: po uložení pošlu řádek s odkazem na příspěvek.",
     isOff: "🔕 Vypnuto: v chatu jen reakce a chyby, všechno ostatní je v archivním kanálu.",
   },
+  pause: {
+    on: "⏸ pauza: nové ukládám, stahuji a dávám do kanálu jako originál (😴 na zprávě), ale do Gemini nic neposílám. Pokračovat: /resume",
+    off: (n) => `▶️ pokračuji: ${n} ve frontě k rozboru`,
+    already: "už je pauza — pokračovat: /resume", notPaused: "pauza není zapnutá",
+    usage: "/pause nebo /resume — pro sebe; majitel: /pause <telegram_id> — pro jiného",
+    noUser: "takový uživatel není — seznam: /users",
+    status: (n) => `⏸ pauza — čeká na rozbor: ${n} · /resume`,
+  },
   projects: {
     current: (l) => `🧭 Tvoje oblasti:\n${l}\n\nZměnit: /projects práce, škola, koníčky, různé`,
     set: (l) => `✅ Oblasti aktualizovány:\n${l}\n\nNové záznamy se podle nich roztřídí; staré po /reprocess all.`,
@@ -157,6 +165,7 @@ Zkus to znovu nebo jinak.`,
   },
   menuButton: "Archiv",
   commands: {
+    pause: "pauza: bez Gemini, jen ukládat", resume: "pokračovat v rozboru",
     retry: "zopakovat chyby a záznamy bez videa", resort: "přetřídit: popiš slovy, jak chceš",
     reprocess: "převést staré záznamy a příspěvky na nový formát",
     lang: "jazyk", notify: "řádek s odkazem na příspěvek po uložení", help: "jak používat",
